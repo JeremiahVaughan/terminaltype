@@ -25,80 +25,82 @@ import (
 )
 
 func main() {
-	ctx, cancel := context.WithCancel(context.Background())
-	signalChan := make(chan os.Signal, 1)
-	signal.Notify(
-		signalChan,
-		os.Interrupt,
-		syscall.SIGINT,
-		syscall.SIGTERM,
-	)
+	if os.Getenv("TEST_MODE") == "false" {
+		ctx, cancel := context.WithCancel(context.Background())
+		signalChan := make(chan os.Signal, 1)
+		signal.Notify(
+			signalChan,
+			os.Interrupt,
+			syscall.SIGINT,
+			syscall.SIGTERM,
+		)
 
-	go func() {
-		<-signalChan
-		cancel()
-	}()
+		go func() {
+			<-signalChan
+			cancel()
+		}()
 
-	sshPort := os.Getenv("SSH_PORT")
-	httpPort := os.Getenv("HTTP_PORT")
-	if sshPort == "" {
-		sshPort = "2222"
-	}
-	if httpPort == "" {
-		httpPort = "8080"
-	}
-	hostKey := os.Getenv("HOST_KEY")
-	if hostKey == "" {
-		log.Fatalf("error, you must provide the HOST_KEY env var")
-	}
-	decodedKey, err := base64.StdEncoding.DecodeString(hostKey)
-	if err != nil {
-		log.Fatalf("error, unable to parse HOST_KEY env var. Error: %v", err)
-	}
-	s, err := wish.NewServer(
-		wish.WithAddress(net.JoinHostPort("0.0.0.0", sshPort)),
-		wish.WithHostKeyPEM(decodedKey),
-		wish.WithMiddleware(
-			bubbletea.Middleware(teaHandler),
-			activeterm.Middleware(), // Bubble Tea apps usually require a PTY.
-			logging.Middleware(),
-		),
-		wish.WithPublicKeyAuth(func(_ ssh.Context, key ssh.PublicKey) bool {
-			return true
-		}),
-		wish.WithKeyboardInteractiveAuth(
-			func(ctx ssh.Context, challenger gossh.KeyboardInteractiveChallenge) bool {
-				return true
-			},
-		),
-	)
-	if err != nil {
-		log.Fatalf("error, starting ssh server. Error: %v", err)
-	}
-
-	go func() {
-		log.Printf("listening for ssh requests")
-		if err = s.ListenAndServe(); err != nil && !errors.Is(err, ssh.ErrServerClosed) {
-			log.Fatalf("error, starting http server. Error: %v", err)
+		sshPort := os.Getenv("SSH_PORT")
+		if sshPort == "" {
+			sshPort = "2222"
 		}
-	}()
-
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "https://www.terminaltype.com", http.StatusFound)
-	})
-
-	go func() {
-		defer cancel()
-		log.Printf("listening for http requests")
-		err := http.ListenAndServe(":"+httpPort, nil)
+		httpPort := os.Getenv("HTTP_PORT")
+		if httpPort == "" {
+			httpPort = "8080"
+		}
+		hostKey := os.Getenv("HOST_KEY")
+		if hostKey == "" {
+			log.Fatalf("error, you must provide the HOST_KEY env var")
+		}
+		decodedKey, err := base64.StdEncoding.DecodeString(hostKey)
 		if err != nil {
-			log.Fatalf("error, when serving http. Error: %v", err)
+			log.Fatalf("error, unable to parse HOST_KEY env var. Error: %v", err)
 		}
-	}()
+		s, err := wish.NewServer(
+			wish.WithAddress(net.JoinHostPort("0.0.0.0", sshPort)),
+			wish.WithHostKeyPEM(decodedKey),
+			wish.WithMiddleware(
+				bubbletea.Middleware(teaHandler),
+				activeterm.Middleware(), // Bubble Tea apps usually require a PTY.
+				logging.Middleware(),
+			),
+			wish.WithPublicKeyAuth(func(_ ssh.Context, key ssh.PublicKey) bool {
+				return true
+			}),
+			wish.WithKeyboardInteractiveAuth(
+				func(ctx ssh.Context, challenger gossh.KeyboardInteractiveChallenge) bool {
+					return true
+				},
+			),
+		)
+		if err != nil {
+			log.Fatalf("error, starting ssh server. Error: %v", err)
+		}
 
-	<-ctx.Done()
-	s.Shutdown(ctx)
-	log.Println("server shutdown properly")
+		go func() {
+			log.Printf("listening for ssh requests")
+			if err = s.ListenAndServe(); err != nil && !errors.Is(err, ssh.ErrServerClosed) {
+				log.Fatalf("error, starting http server. Error: %v", err)
+			}
+		}()
+
+		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "https://www.terminaltype.com", http.StatusFound)
+		})
+
+		go func() {
+			defer cancel()
+			log.Printf("listening for http requests")
+			err := http.ListenAndServe(":"+httpPort, nil)
+			if err != nil {
+				log.Fatalf("error, when serving http. Error: %v", err)
+			}
+		}()
+
+		<-ctx.Done()
+		s.Shutdown(ctx)
+		log.Println("server shutdown properly")
+	}
 }
 
 type sshOutput struct {
