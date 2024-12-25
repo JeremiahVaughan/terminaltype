@@ -6,12 +6,17 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
+
+	"database/sql"
+	"embed"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -21,8 +26,15 @@ import (
 	"github.com/charmbracelet/wish/bubbletea"
 	"github.com/charmbracelet/wish/logging"
 	"github.com/google/uuid"
+	openai "github.com/sashabaranov/go-openai"
 	gossh "golang.org/x/crypto/ssh"
 )
+
+var database *sql.DB
+var chatClient *openai.Client
+
+//go:embed schema/*
+var databaseFiles embed.FS
 
 func main() {
 	if os.Getenv("TEST_MODE") == "false" {
@@ -40,6 +52,12 @@ func main() {
 			cancel()
 		}()
 
+		key := os.Getenv("OPENAI_API_KEY")
+		if key == "" {
+			log.Fatal("error, must provide the OPENAI_API_KEY env var")
+		}
+		chatClient = openai.NewClient(key)
+
 		sshPort := os.Getenv("SSH_PORT")
 		if sshPort == "" {
 			sshPort = "2222"
@@ -48,10 +66,54 @@ func main() {
 		if httpPort == "" {
 			httpPort = "8080"
 		}
+		numberOfSentencesPerTypingTest := os.Getenv("NUMBER_OF_SENTENCES_PER_TYPING_TEST")
+		sentencesPerTypingTestParsed := 5
+		var err error
+		if numberOfSentencesPerTypingTest != "" {
+			sentencesPerTypingTestParsed, err = strconv.Atoi(numberOfSentencesPerTypingTest)
+			if err != nil {
+				log.Fatalf("error, unable to parse value provided for NUMBER_OF_SENTENCES_PER_TYPING_TEST. Provided: %v", numberOfSentencesPerTypingTest)
+			}
+            if sentencesPerTypingTestParsed < 1 {
+                log.Fatalf("error, invalid value provided for NUMBER_OF_SENTENCES_PER_TYPING_TEST. Provided: %d", sentencesPerTypingTestParsed)
+            }
+		}
 		hostKey := os.Getenv("HOST_KEY")
 		if hostKey == "" {
 			log.Fatalf("error, you must provide the HOST_KEY env var")
 		}
+
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			log.Fatalf("error, could not find the home directory. Error: %v", err)
+		}
+		dataDirectory := fmt.Sprintf("%s/terminaltype_data/", homeDir)
+		err = os.MkdirAll(dataDirectory, os.ModePerm)
+		if err != nil {
+			log.Fatalf("error, could not create data directory. Error: %v", err)
+		}
+		dbFile := fmt.Sprintf("%s%s", dataDirectory, "data")
+		_, err = os.Stat(dbFile)
+		if os.IsNotExist(err) {
+			var file *os.File
+			file, err = os.Create(dbFile)
+			if err != nil {
+				log.Fatalf("error, when creating db file. Error: %v", err)
+			}
+			file.Close()
+		} else if err != nil {
+			// An error other than the file not existing occurred
+			log.Fatalf("error, when checking db file exists. Error: %v", err)
+		}
+		database, err = sql.Open("sqlite3", dbFile)
+		if err != nil {
+			log.Fatalf("error, when establishing connection with sqlite db. Error: %v", err)
+		}
+		err = processSchemaChanges(databaseFiles)
+		if err != nil {
+			log.Fatalf("error, when processing schema changes. Error: %v", err)
+		}
+
 		decodedKey, err := base64.StdEncoding.DecodeString(hostKey)
 		if err != nil {
 			log.Fatalf("error, unable to parse HOST_KEY env var. Error: %v", err)
@@ -78,9 +140,16 @@ func main() {
 		}
 
 		go func() {
+            err2 := ensureEnoughGeneratedText(ctx, sentencesPerTypingTestParsed)
+            if err2 != nil {
+                log.Fatalf("error, when ensureEnoughGeneratedText() for main(). Error: %v", err2)
+            }
+		}()
+
+		go func() {
 			log.Printf("listening for ssh requests")
-			if err = s.ListenAndServe(); err != nil && !errors.Is(err, ssh.ErrServerClosed) {
-				log.Fatalf("error, starting http server. Error: %v", err)
+            if err3 := s.ListenAndServe(); err3 != nil && !errors.Is(err3, ssh.ErrServerClosed) {
+				log.Fatalf("error, starting http server. Error: %v", err3)
 			}
 		}()
 
@@ -91,9 +160,9 @@ func main() {
 		go func() {
 			defer cancel()
 			log.Printf("listening for http requests")
-			err := http.ListenAndServe(":"+httpPort, nil)
-			if err != nil {
-				log.Fatalf("error, when serving http. Error: %v", err)
+			err4 := http.ListenAndServe(":"+httpPort, nil)
+			if err4 != nil {
+				log.Fatalf("error, when serving http. Error: %v", err4)
 			}
 		}()
 
