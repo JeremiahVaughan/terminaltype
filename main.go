@@ -25,6 +25,8 @@ import (
 	"github.com/charmbracelet/wish/activeterm"
 	"github.com/charmbracelet/wish/bubbletea"
 	"github.com/charmbracelet/wish/logging"
+
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/google/uuid"
 	openai "github.com/sashabaranov/go-openai"
 	gossh "golang.org/x/crypto/ssh"
@@ -32,6 +34,8 @@ import (
 
 var database *sql.DB
 var chatClient *openai.Client
+var loadingFinished = make(chan modelData, 1)
+var docStyle = lipgloss.NewStyle()
 
 //go:embed schema/*
 var databaseFiles embed.FS
@@ -74,9 +78,9 @@ func main() {
 			if err != nil {
 				log.Fatalf("error, unable to parse value provided for NUMBER_OF_SENTENCES_PER_TYPING_TEST. Provided: %v", numberOfSentencesPerTypingTest)
 			}
-            if sentencesPerTypingTestParsed < 1 {
-                log.Fatalf("error, invalid value provided for NUMBER_OF_SENTENCES_PER_TYPING_TEST. Provided: %d", sentencesPerTypingTestParsed)
-            }
+			if sentencesPerTypingTestParsed < 1 {
+				log.Fatalf("error, invalid value provided for NUMBER_OF_SENTENCES_PER_TYPING_TEST. Provided: %d", sentencesPerTypingTestParsed)
+			}
 		}
 		hostKey := os.Getenv("HOST_KEY")
 		if hostKey == "" {
@@ -140,15 +144,15 @@ func main() {
 		}
 
 		go func() {
-            err2 := ensureEnoughGeneratedText(ctx, sentencesPerTypingTestParsed)
-            if err2 != nil {
-                log.Fatalf("error, when ensureEnoughGeneratedText() for main(). Error: %v", err2)
-            }
+			err2 := ensureEnoughGeneratedText(ctx, sentencesPerTypingTestParsed)
+			if err2 != nil {
+				log.Fatalf("error, when ensureEnoughGeneratedText() for main(). Error: %v", err2)
+			}
 		}()
 
 		go func() {
 			log.Printf("listening for ssh requests")
-            if err3 := s.ListenAndServe(); err3 != nil && !errors.Is(err3, ssh.ErrServerClosed) {
+			if err3 := s.ListenAndServe(); err3 != nil && !errors.Is(err3, ssh.ErrServerClosed) {
 				log.Fatalf("error, starting http server. Error: %v", err3)
 			}
 		}()
@@ -199,6 +203,16 @@ type model struct {
 	context     context.Context
 	renderer    *lipgloss.Renderer
 	fingerprint string
+	activeView  activeView
+	loading     bool
+	spinner     spinner.Model
+	data        modelData
+	termWidth   int
+	termHeight  int
+}
+
+type modelData struct {
+	err error
 }
 
 func NewModel(
@@ -206,13 +220,22 @@ func NewModel(
 	fingerprint string,
 ) tea.Model {
 	ctx := context.Background()
-	return model{
+	m := model{
 		context:     ctx,
 		renderer:    renderer,
 		fingerprint: fingerprint,
+		activeView:  activeViewWelcome,
 	}
+	m.resetSpinner()
+	return m
 }
 
 func (m model) Init() tea.Cmd {
 	return nil
+}
+
+func (m *model) resetSpinner() {
+	s := spinner.New()
+	s.Spinner = spinner.Moon
+	m.spinner = s
 }
