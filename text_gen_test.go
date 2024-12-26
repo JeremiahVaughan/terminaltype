@@ -76,3 +76,22 @@ func Test_isEnoughTextGenerated(t *testing.T) {
 	})
 
 }
+
+func Test_filterOutWeirdText(t *testing.T) {
+	t.Run("stuff to convert", func(t *testing.T) {
+		input := "café, pièce de résistance, naïve “STUFF”"
+		expected := "cafe, piece de resistance, naive \"STUFF\""
+		got := filterOutWeirdText(input)
+		if got != expected {
+			t.Errorf("error, expected %s but got %s", expected, got)
+		}
+	})
+	t.Run("nothing to convert", func(t *testing.T) {
+		input := "nothing to convert"
+		expected := "nothing to convert"
+		got := filterOutWeirdText(input)
+		if got != expected {
+			t.Errorf("error, expected %s but got %s", expected, got)
+		}
+	})
+}

@@ -32,6 +32,7 @@ func ensureEnoughGeneratedText(ctx context.Context) error {
 			if err != nil {
 				return fmt.Errorf("error, when gatherRandomText() for ensureEnoughGeneratedText(). Error: %v", err)
 			}
+			randomText = filterOutWeirdText(randomText)
 			err = persistGeneratedSentences(randomText)
 			if err != nil {
 				return fmt.Errorf("error, when persistGeneratedSentences() for ensureEnoughGeneratedText(). Error: %v", err)
@@ -163,4 +164,74 @@ LIMIT 1`,
 		}
 	}
 	return result, nil
+}
+
+var makeTextNotWeirdMap = map[string]string{
+	`”`: `"`,
+	`“`: `"`,
+	"À": "A",
+	"Á": "A",
+	"Â": "A",
+	"Ã": "A",
+	"Ä": "A",
+	"Å": "A",
+	"Ç": "C",
+	"È": "E",
+	"É": "E",
+	"Ê": "E",
+	"Ë": "E",
+	"Ì": "I",
+	"Í": "I",
+	"Î": "I",
+	"Ï": "I",
+	"Ñ": "N",
+	"Ò": "O",
+	"Ó": "O",
+	"Ô": "O",
+	"Õ": "O",
+	"Ö": "O",
+	"Ø": "O",
+	"Ù": "U",
+	"Ú": "U",
+	"Û": "U",
+	"Ü": "U",
+	"Ý": "Y",
+	"à": "a",
+	"á": "a",
+	"â": "a",
+	"ã": "a",
+	"ä": "a",
+	"å": "a",
+	"ç": "c",
+	"è": "e",
+	"é": "e",
+	"ê": "e",
+	"ë": "e",
+	"ì": "i",
+	"í": "i",
+	"î": "i",
+	"ï": "i",
+	"ñ": "n",
+	"ò": "o",
+	"ó": "o",
+	"ô": "o",
+	"õ": "o",
+	"ö": "o",
+	"ø": "o",
+	"ù": "u",
+	"ú": "u",
+	"û": "u",
+	"ü": "u",
+	"ý": "y",
+	"ÿ": "y",
+}
+
+func filterOutWeirdText(text string) string {
+	parts := strings.Split(text, "")
+	for i, s := range parts {
+		if convert, ok := makeTextNotWeirdMap[s]; ok {
+			parts[i] = convert
+		}
+	}
+	return strings.Join(parts, "")
 }

@@ -36,7 +36,7 @@ import (
 var database *sql.DB
 var chatClient *openai.Client
 var loadingFinished = make(chan modelData, 1)
-var sentencesPerTypingTest int
+var sentencesPerTypingTest = 3
 var typingTestDesiredWidth = 60
 var textBaseStyle lipgloss.Style
 var correctStyle lipgloss.Style
@@ -82,7 +82,6 @@ func main() {
 			httpPort = "8080"
 		}
 		numberOfSentencesPerTypingTestString := os.Getenv("NUMBER_OF_SENTENCES_PER_TYPING_TEST")
-		sentencesPerTypingTest = 5
 		var err error
 		if numberOfSentencesPerTypingTestString != "" {
 			sentencesPerTypingTest, err = strconv.Atoi(numberOfSentencesPerTypingTestString)

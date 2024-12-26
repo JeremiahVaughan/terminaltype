@@ -50,6 +50,8 @@ PRESS ENTER TO START
 			m.correctPos,
 			m.incorrectPos,
 		)
+	case activeViewRaceFinished:
+		content = "congrats"
 	}
 	return m.renderer.Place(
 		m.termWidth,

@@ -14,8 +14,9 @@ import (
 type activeView string
 
 const (
-	activeViewWelcome activeView = "w"
-	activeViewRace    activeView = "r"
+	activeViewWelcome      activeView = "w"
+	activeViewRace         activeView = "r"
+	activeViewRaceFinished activeView = "rs"
 )
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -83,8 +84,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if keyMsg == m.raceWordsCharSlice[m.correctPos] {
 							m.correctPos++
 							m.incorrectPos = m.correctPos // stay in sync
-							if m.correctPos == len(m.raceWordsCharSlice)-1 {
-								// todo race over
+							if m.correctPos >= len(m.raceWordsCharSlice) {
+								m.activeView = activeViewRaceFinished
 							}
 						} else {
 							i := m.incorrectPos
