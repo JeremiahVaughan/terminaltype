@@ -12,7 +12,7 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
-func ensureEnoughGeneratedText(ctx context.Context, sentencesPerTypingTest int) error {
+func ensureEnoughGeneratedText(ctx context.Context) error {
 	for {
 		numberOfGeneratedSentences, err := fetchNumberOfGeneratedSentences()
 		if err != nil {
@@ -98,7 +98,6 @@ func generateSqlForSentences(sentences []string) (string, []any) {
 			continue
 		}
 		builder.WriteString(s)
-		builder.WriteString(". ")
 		args = append(args, builder.String())
 		builder.Reset()
 		inserts = append(inserts, "(?)")

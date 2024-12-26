@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/muesli/termenv"
 	"log"
 	"net"
 	"net/http"
@@ -35,12 +36,22 @@ import (
 var database *sql.DB
 var chatClient *openai.Client
 var loadingFinished = make(chan modelData, 1)
-var docStyle = lipgloss.NewStyle()
+var sentencesPerTypingTest int
+var typingTestDesiredWidth = 60
+var textBaseStyle lipgloss.Style
+var correctStyle lipgloss.Style
+var incorrectStyle lipgloss.Style
+var regularStyle lipgloss.Style
+var cursorStyle lipgloss.Style
 
 //go:embed schema/*
 var databaseFiles embed.FS
 
 func main() {
+
+	// forces the color profile since its not getting applied sometimes
+	lipgloss.SetColorProfile(termenv.TrueColor)
+
 	if os.Getenv("TEST_MODE") == "false" {
 		ctx, cancel := context.WithCancel(context.Background())
 		signalChan := make(chan os.Signal, 1)
@@ -70,16 +81,26 @@ func main() {
 		if httpPort == "" {
 			httpPort = "8080"
 		}
-		numberOfSentencesPerTypingTest := os.Getenv("NUMBER_OF_SENTENCES_PER_TYPING_TEST")
-		sentencesPerTypingTestParsed := 5
+		numberOfSentencesPerTypingTestString := os.Getenv("NUMBER_OF_SENTENCES_PER_TYPING_TEST")
+		sentencesPerTypingTest = 5
 		var err error
-		if numberOfSentencesPerTypingTest != "" {
-			sentencesPerTypingTestParsed, err = strconv.Atoi(numberOfSentencesPerTypingTest)
+		if numberOfSentencesPerTypingTestString != "" {
+			sentencesPerTypingTest, err = strconv.Atoi(numberOfSentencesPerTypingTestString)
 			if err != nil {
-				log.Fatalf("error, unable to parse value provided for NUMBER_OF_SENTENCES_PER_TYPING_TEST. Provided: %v", numberOfSentencesPerTypingTest)
+				log.Fatalf("error, unable to parse value provided for NUMBER_OF_SENTENCES_PER_TYPING_TEST. Provided: %v", numberOfSentencesPerTypingTestString)
 			}
-			if sentencesPerTypingTestParsed < 1 {
-				log.Fatalf("error, invalid value provided for NUMBER_OF_SENTENCES_PER_TYPING_TEST. Provided: %d", sentencesPerTypingTestParsed)
+			if sentencesPerTypingTest < 1 {
+				log.Fatalf("error, invalid value provided for NUMBER_OF_SENTENCES_PER_TYPING_TEST. Provided: %d", sentencesPerTypingTest)
+			}
+		}
+		typingTestDesiredWidthString := os.Getenv("TYPING_TEST_DESIRED_WIDTH")
+		if typingTestDesiredWidthString != "" {
+			typingTestDesiredWidth, err = strconv.Atoi(typingTestDesiredWidthString)
+			if err != nil {
+				log.Fatalf("error, unable to parse value provided for TYPING_TEST_DESIRED_WIDTH. Provided: %v", typingTestDesiredWidthString)
+			}
+			if typingTestDesiredWidth < 5 {
+				log.Fatalf("error, invalid value provided for TYPING_TEST_DESIRED_WIDTH. Provided: %d", typingTestDesiredWidth)
 			}
 		}
 		hostKey := os.Getenv("HOST_KEY")
@@ -143,8 +164,14 @@ func main() {
 			log.Fatalf("error, starting ssh server. Error: %v", err)
 		}
 
+		textBaseStyle = lipgloss.NewStyle().Width(typingTestDesiredWidth)
+		correctStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#58bc54"))
+		incorrectStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#ce4041"))
+		regularStyle = lipgloss.NewStyle()
+		cursorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color("#ffffff"))
+
 		go func() {
-			err2 := ensureEnoughGeneratedText(ctx, sentencesPerTypingTestParsed)
+			err2 := ensureEnoughGeneratedText(ctx)
 			if err2 != nil {
 				log.Fatalf("error, when ensureEnoughGeneratedText() for main(). Error: %v", err2)
 			}
@@ -200,19 +227,23 @@ func teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 }
 
 type model struct {
-	context     context.Context
-	renderer    *lipgloss.Renderer
-	fingerprint string
-	activeView  activeView
-	loading     bool
-	spinner     spinner.Model
-	data        modelData
-	termWidth   int
-	termHeight  int
+	context            context.Context
+	renderer           *lipgloss.Renderer
+	fingerprint        string
+	activeView         activeView
+	loading            bool
+	spinner            spinner.Model
+	data               modelData
+	raceWordsCharSlice []string
+	termWidth          int
+	termHeight         int
+	correctPos         int
+	incorrectPos       int
 }
 
 type modelData struct {
-	err error
+	err       error
+	raceWords string
 }
 
 func NewModel(

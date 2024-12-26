@@ -1,7 +1,11 @@
 package main
 
 import (
-	"time"
+	"database/sql"
+	"fmt"
+	"log"
+	"math/rand"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
@@ -32,10 +36,65 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					md := m.data
 					go func() {
 						// start race, for now but todo try to join one first if one is available
-						time.Sleep(50 * time.Second)
+						md.raceWords, md.err = fetchRaceWords()
+						if md.err != nil {
+							md.err = fmt.Errorf("error, when fetchRaceWords() for Update(). Error: %v", md.err)
+						}
 						loadingFinished <- md
 					}()
 					return m, m.spinner.Tick
+				}
+			case tea.KeyCtrlW:
+				if m.activeView == activeViewRace {
+					i := m.incorrectPos
+					j := 0
+					for i > 0 && (m.data.raceWords[i-1] != ' ' || j == 0) {
+						i--
+						j++
+					}
+					if m.correctPos > i {
+						m.correctPos = i
+					}
+					m.incorrectPos = i
+				}
+			case tea.KeyCtrlH, tea.KeyBackspace:
+				if m.activeView == activeViewRace {
+					if m.incorrectPos > m.correctPos {
+						if m.incorrectPos > 0 {
+							m.incorrectPos--
+						}
+					} else {
+						if m.correctPos > 0 {
+							m.correctPos--
+						}
+						if m.incorrectPos > 0 {
+							m.incorrectPos--
+						}
+					}
+				}
+			default:
+				if m.activeView == activeViewRace {
+					if m.incorrectPos > m.correctPos {
+						if m.incorrectPos < len(m.raceWordsCharSlice) {
+							m.incorrectPos++
+						}
+					} else if m.correctPos < len(m.raceWordsCharSlice) && m.incorrectPos < len(m.raceWordsCharSlice) {
+						keyMsg := msg.String()
+						if keyMsg == m.raceWordsCharSlice[m.correctPos] {
+							m.correctPos++
+							m.incorrectPos = m.correctPos // stay in sync
+							if m.correctPos == len(m.raceWordsCharSlice)-1 {
+								// todo race over
+							}
+						} else {
+							i := m.incorrectPos
+							for i > 0 && m.data.raceWords[i-1] != ' ' {
+								i--
+							}
+							m.correctPos = i
+							m.incorrectPos++
+						}
+					}
 				}
 			}
 		}
@@ -49,6 +108,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch m.activeView {
 			case activeViewWelcome:
 				m.activeView = activeViewRace
+				m.raceWordsCharSlice = strings.Split(m.data.raceWords, "")
 			}
 		default:
 			m.spinner, cmd = m.spinner.Update(msg)
@@ -78,4 +138,148 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// can use progress bars to represent other players. The current player should always been green so they don't lose track who they are but other players can be random colors other than green.
 	// There should be a time limit on the race but long enough to let even very slow typers to finish. This prevents never ending sessions.
 	// race should end for individuals once they have completed, which means they don't have to wait for other racers to finish before they can start another race
+}
+
+func fetchRaceWords() (string, error) {
+	totalSentences, err := fetchNumberOfGeneratedSentences()
+	if err != nil {
+		return "", fmt.Errorf("error, when fetchNumberOfGeneratedSentences() for fetchRaceWords(). Error: %v", err)
+	}
+	if totalSentences <= sentencesPerTypingTest {
+		return "", fmt.Errorf("error, more sentences need to generate, please wait.")
+	}
+	var randomSentences []any
+	for {
+		randomSentence := rand.Intn(totalSentences) + 1
+		for _, r := range randomSentences {
+			if r == randomSentence {
+				continue
+			}
+		}
+		randomSentences = append(randomSentences, randomSentence)
+		if len(randomSentences) >= sentencesPerTypingTest {
+			break
+		}
+	}
+
+	placeholders := make([]string, sentencesPerTypingTest)
+	for i := 0; i < sentencesPerTypingTest; i++ {
+		placeholders[i] = "?"
+	}
+
+	theQuery := fmt.Sprintf(
+		`SELECT text
+	FROM sentence
+	WHERE id IN (%s)`,
+		strings.Join(placeholders, ","),
+	)
+	rows, err := database.Query(
+		theQuery,
+		randomSentences...,
+	)
+
+	defer func(rows *sql.Rows) {
+		if rows != nil {
+			closeRowsError := rows.Close()
+			if closeRowsError != nil {
+				// no choice but to log the error since defer doesn't let us return errors
+				// defer is needed though because it ensures a cleanup attempt is made even if we should return early due to an error
+				log.Printf("error, when attempting to close database rows: %v", closeRowsError)
+			}
+		}
+	}(rows)
+	if err != nil {
+		return "", fmt.Errorf("error, when attempting to retrieve records. Error: %v", err)
+	}
+
+	queryResults := make([]string, sentencesPerTypingTest)
+	i := 0
+	for rows.Next() {
+		var theQueryResult string
+		err = rows.Scan(
+			&theQueryResult,
+		)
+		if err != nil {
+			return "", fmt.Errorf("error, when scanning database rows. Error: %v", err)
+		}
+		queryResults[i] = theQueryResult
+		i++
+	}
+	err = rows.Err()
+	if err != nil {
+		return "", fmt.Errorf("error, when iterating through database rows. Error: %v", err)
+	}
+	builder := strings.Builder{}
+	builder.WriteString(strings.Join(queryResults, ". "))
+	builder.WriteRune('.')
+	return builder.String(), nil
+}
+
+func formatWordBlock(
+	raceWordsCharSlice []string,
+	correctPos int,
+	incorrectPos int,
+) string {
+	unitSeperator := "\u200B" // this zero width space char doesn't appear to conflict or get counted in word wrap length functions
+	raceWordsCharSlice = insert(raceWordsCharSlice, correctPos, unitSeperator)
+	if correctPos != incorrectPos {
+		raceWordsCharSlice = insert(raceWordsCharSlice, incorrectPos+1, unitSeperator)
+	}
+	str := strings.Join(raceWordsCharSlice, "")
+	str = textBaseStyle.Render(str)
+	str = applyTextColors(
+		str,
+		unitSeperator,
+	)
+	return textBaseStyle.Render(str)
+}
+
+func applyTextColors(text string, unitSeparator string) string {
+	parts := strings.Split(text, unitSeparator)
+	b := strings.Builder{}
+
+	for i, p := range parts {
+		switch i {
+		case 0:
+			b.WriteString(renderAndTrim(p, false, correctStyle.Render))
+
+		case 1:
+			if len(parts) == 3 {
+				p = strings.ReplaceAll(p, " ", "_")
+				b.WriteString(renderAndTrim(p, false, incorrectStyle.Render))
+			} else {
+				b.WriteString(renderAndTrim(p, true, regularStyle.Render))
+			}
+
+		case 2:
+			b.WriteString(renderAndTrim(p, true, regularStyle.Render))
+		}
+	}
+
+	return b.String()
+}
+
+func renderAndTrim(text string, cursor bool, style func(...string) string) string {
+	cutset := " \t\n\r"
+	var b strings.Builder
+	if cursor {
+		cursorPart := text[:1]
+		rest := text[1:]
+		b.WriteString(cursorStyle.Render(cursorPart))
+		b.WriteString(style(rest))
+	} else {
+		b.WriteString(style(text))
+	}
+	return strings.TrimRight(b.String(), cutset)
+}
+
+func insert(slice []string, index int, value string) []string {
+	if index < 0 || index > len(slice) {
+		panic("index out of range")
+	}
+	newSlice := make([]string, len(slice)+1)
+	copy(newSlice, slice[:index])
+	newSlice[index] = value
+	copy(newSlice[index+1:], slice[index:])
+	return newSlice
 }

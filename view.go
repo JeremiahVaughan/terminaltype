@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -44,13 +45,17 @@ PRESS ENTER TO START
  '----------------'  '----------------'  '----------------'  '----------------' `
 		}
 	case activeViewRace:
-		return "time to race"
+		content = formatWordBlock(
+			m.raceWordsCharSlice,
+			m.correctPos,
+			m.incorrectPos,
+		)
 	}
 	return m.renderer.Place(
 		m.termWidth,
 		m.termHeight,
 		lipgloss.Center,
 		lipgloss.Center,
-		docStyle.Render(content),
+		content,
 	)
 }
