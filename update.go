@@ -6,6 +6,7 @@ import (
 	"log"
 	"math/rand"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
@@ -37,7 +38,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					md := m.data
 					go func() {
 						// start race, for now but todo try to join one first if one is available
-						md.raceWords, md.err = fetchRaceWords()
+						md.raceWords, md.wordCount, md.err = fetchRaceWords()
 						if md.err != nil {
 							md.err = fmt.Errorf("error, when fetchRaceWords() for Update(). Error: %v", md.err)
 						}
@@ -85,6 +86,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							m.correctPos++
 							m.incorrectPos = m.correctPos // stay in sync
 							if m.correctPos >= len(m.raceWordsCharSlice) {
+								m.wordsPerMin = calculateWordsPerMin(
+									m.raceStartTime,
+									time.Now().UnixMilli(),
+									m.data.wordCount,
+								)
 								m.activeView = activeViewRaceFinished
 							}
 						} else {
@@ -110,6 +116,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case activeViewWelcome:
 				m.activeView = activeViewRace
 				m.raceWordsCharSlice = strings.Split(m.data.raceWords, "")
+				m.raceStartTime = time.Now().UnixMilli()
 			}
 		default:
 			m.spinner, cmd = m.spinner.Update(msg)
@@ -141,13 +148,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// race should end for individuals once they have completed, which means they don't have to wait for other racers to finish before they can start another race
 }
 
-func fetchRaceWords() (string, error) {
+func fetchRaceWords() (string, int, error) {
 	totalSentences, err := fetchNumberOfGeneratedSentences()
 	if err != nil {
-		return "", fmt.Errorf("error, when fetchNumberOfGeneratedSentences() for fetchRaceWords(). Error: %v", err)
+		return "", 0, fmt.Errorf("error, when fetchNumberOfGeneratedSentences() for fetchRaceWords(). Error: %v", err)
 	}
 	if totalSentences <= sentencesPerTypingTest {
-		return "", fmt.Errorf("error, more sentences need to generate, please wait.")
+		return "", 0, fmt.Errorf("error, more sentences need to generate, please wait.")
 	}
 	var randomSentences []any
 	for {
@@ -190,7 +197,7 @@ func fetchRaceWords() (string, error) {
 		}
 	}(rows)
 	if err != nil {
-		return "", fmt.Errorf("error, when attempting to retrieve records. Error: %v", err)
+		return "", 0, fmt.Errorf("error, when attempting to retrieve records. Error: %v", err)
 	}
 
 	queryResults := make([]string, sentencesPerTypingTest)
@@ -201,19 +208,21 @@ func fetchRaceWords() (string, error) {
 			&theQueryResult,
 		)
 		if err != nil {
-			return "", fmt.Errorf("error, when scanning database rows. Error: %v", err)
+			return "", 0, fmt.Errorf("error, when scanning database rows. Error: %v", err)
 		}
 		queryResults[i] = theQueryResult
 		i++
 	}
 	err = rows.Err()
 	if err != nil {
-		return "", fmt.Errorf("error, when iterating through database rows. Error: %v", err)
+		return "", 0, fmt.Errorf("error, when iterating through database rows. Error: %v", err)
 	}
 	builder := strings.Builder{}
 	builder.WriteString(strings.Join(queryResults, ". "))
 	builder.WriteRune('.')
-	return builder.String(), nil
+	text := builder.String()
+	wordCount := len(strings.Split(text, " ")) // todo consider saving the word count in the DB to speed up game start times
+	return text, wordCount, nil
 }
 
 func formatWordBlock(
@@ -283,4 +292,21 @@ func insert(slice []string, index int, value string) []string {
 	newSlice[index] = value
 	copy(newSlice[index+1:], slice[index:])
 	return newSlice
+}
+
+func calculateWordsPerMin(startTimeMillis int64, endTimeMillis int64,
+	wordsTyped int) int {
+	// Calculate the time difference in milliseconds
+	timeDifferenceMillis := endTimeMillis - startTimeMillis
+
+	// Convert milliseconds to minutes
+	timeDifferenceMinutes := float64(timeDifferenceMillis) / 60000.0
+
+	// Calculate words per minute
+	if timeDifferenceMinutes <= 0 {
+		return 0 // Prevent division by zero or negative time
+	}
+
+	wordsPerMin := float64(wordsTyped) / timeDifferenceMinutes
+	return int(wordsPerMin + 0.5) // Round to the nearest whole number
 }

@@ -51,7 +51,7 @@ PRESS ENTER TO START
 			m.incorrectPos,
 		)
 	case activeViewRaceFinished:
-		content = "congrats"
+		content = fmt.Sprintf("Words Per Min: %d", m.wordsPerMin)
 	}
 	return m.renderer.Place(
 		m.termWidth,

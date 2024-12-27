@@ -238,11 +238,14 @@ type model struct {
 	termHeight         int
 	correctPos         int
 	incorrectPos       int
+	raceStartTime      int64
+	wordsPerMin        int
 }
 
 type modelData struct {
 	err       error
 	raceWords string
+	wordCount int
 }
 
 func NewModel(
