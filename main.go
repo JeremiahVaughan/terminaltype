@@ -54,8 +54,7 @@ func main() {
 	// forces the color profile since its not getting applied sometimes
 	lipgloss.SetColorProfile(termenv.TrueColor)
 
-	if os.Getenv("TEST_MODE") == "false" {
-
+	if os.Getenv("TF_VAR_test_mode") == "false" {
 		environment := os.Getenv("TF_VAR_environment")
 		if environment == "" {
 			log.Fatal("error, must provide the TF_VAR_environment env var")
