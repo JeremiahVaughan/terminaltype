@@ -1,3 +1,3 @@
 terraform {
-  source = "../../../modules/main"
+  source = "../../modules/main.tf"
 }
