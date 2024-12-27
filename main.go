@@ -15,6 +15,7 @@ import (
 	"os/signal"
 	"strconv"
 	"syscall"
+	"time"
 
 	"database/sql"
 	"embed"
@@ -26,6 +27,7 @@ import (
 	"github.com/charmbracelet/wish/activeterm"
 	"github.com/charmbracelet/wish/bubbletea"
 	"github.com/charmbracelet/wish/logging"
+	"github.com/getsentry/sentry-go"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/google/uuid"
@@ -53,6 +55,31 @@ func main() {
 	lipgloss.SetColorProfile(termenv.TrueColor)
 
 	if os.Getenv("TEST_MODE") == "false" {
+
+		environment := os.Getenv("TF_VAR_environment")
+		if environment == "" {
+			log.Fatal("error, must provide the TF_VAR_environment env var")
+		}
+
+		sentryEndpoint := os.Getenv("TF_VAR_sentry_end_point")
+		if sentryEndpoint == "" {
+			log.Fatal("error, must provide the TF_VAR_sentry_end_point env var")
+		}
+
+		err := sentry.Init(sentry.ClientOptions{
+			Dsn: sentryEndpoint,
+			// Set TracesSampleRate to 1.0 to capture 100%
+			// of transactions for performance monitoring.
+			// We recommend adjusting this value in production,
+			TracesSampleRate: 1.0,
+
+			Environment: environment,
+		})
+		if err != nil {
+			log.Fatalf("error, sentry.Init(). Error: %v", err)
+		}
+		defer sentry.Flush(2 * time.Second)
+
 		ctx, cancel := context.WithCancel(context.Background())
 		signalChan := make(chan os.Signal, 1)
 		signal.Notify(
@@ -67,58 +94,66 @@ func main() {
 			cancel()
 		}()
 
-		key := os.Getenv("OPENAI_API_KEY")
+		key := os.Getenv("TF_VAR_openai_api_key")
 		if key == "" {
-			log.Fatal("error, must provide the OPENAI_API_KEY env var")
+			HandleUnexpectedError(nil, errors.New("error, must provide the TF_VAR_openai_api_key env var"))
+			return
 		}
 		chatClient = openai.NewClient(key)
 
-		sshPort := os.Getenv("SSH_PORT")
+		sshPort := os.Getenv("TF_VAR_ssh_port")
 		if sshPort == "" {
 			sshPort = "2222"
 		}
-		httpPort := os.Getenv("HTTP_PORT")
+		httpPort := os.Getenv("TF_VAR_http_port")
 		if httpPort == "" {
 			httpPort = "8080"
 		}
-		numberOfSentencesPerTypingTestString := os.Getenv("NUMBER_OF_SENTENCES_PER_TYPING_TEST")
-		var err error
+		numberOfSentencesPerTypingTestString := os.Getenv("TF_VAR_number_of_sentences_per_typing_test")
 		if numberOfSentencesPerTypingTestString != "" {
 			sentencesPerTypingTest, err = strconv.Atoi(numberOfSentencesPerTypingTestString)
 			if err != nil {
-				log.Fatalf("error, unable to parse value provided for NUMBER_OF_SENTENCES_PER_TYPING_TEST. Provided: %v", numberOfSentencesPerTypingTestString)
+				HandleUnexpectedError(nil, fmt.Errorf("error, unable to parse value provided for TF_VAR_number_of_sentences_per_typing_test. Provided: %v", numberOfSentencesPerTypingTestString))
+				return
 			}
 			if sentencesPerTypingTest < 1 {
-				log.Fatalf("error, invalid value provided for NUMBER_OF_SENTENCES_PER_TYPING_TEST. Provided: %d", sentencesPerTypingTest)
+				HandleUnexpectedError(nil, fmt.Errorf("error, invalid value provided for TF_VAR_number_of_sentences_per_typing_test. Provided: %d", sentencesPerTypingTest))
+				return
 			}
 		}
-		typingTestDesiredWidthString := os.Getenv("TYPING_TEST_DESIRED_WIDTH")
+		typingTestDesiredWidthString := os.Getenv("TF_VAR_typing_test_desired_width")
 		if typingTestDesiredWidthString != "" {
 			typingTestDesiredWidth, err = strconv.Atoi(typingTestDesiredWidthString)
 			if err != nil {
-				log.Fatalf("error, unable to parse value provided for TYPING_TEST_DESIRED_WIDTH. Provided: %v", typingTestDesiredWidthString)
+				HandleUnexpectedError(nil, fmt.Errorf("error, unable to parse value provided for TF_VAR_typing_test_desired_width. Provided: %v", typingTestDesiredWidthString))
+				return
 			}
 			if typingTestDesiredWidth < 5 {
-				log.Fatalf("error, invalid value provided for TYPING_TEST_DESIRED_WIDTH. Provided: %d", typingTestDesiredWidth)
+				HandleUnexpectedError(nil, fmt.Errorf("error, invalid value provided for TF_VAR_typing_test_desired_width. Provided: %d", typingTestDesiredWidth))
+				return
 			}
 		}
-		hostKey := os.Getenv("HOST_KEY")
+		hostKey := os.Getenv("TF_VAR_host_key")
 		if hostKey == "" {
-			log.Fatalf("error, you must provide the HOST_KEY env var")
+			HandleUnexpectedError(nil, errors.New("error, you must provide the TF_VAR_host_key env var"))
+			return
 		}
 		decodedKey, err := base64.StdEncoding.DecodeString(hostKey)
 		if err != nil {
-			log.Fatalf("error, unable to parse HOST_KEY env var. Error: %v", err)
+			HandleUnexpectedError(nil, fmt.Errorf("error, unable to parse TF_VAR_host_key env var. Error: %v", err))
+			return
 		}
 
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
-			log.Fatalf("error, could not find the home directory. Error: %v", err)
+			HandleUnexpectedError(nil, fmt.Errorf("error, could not find the home directory. Error: %v", err))
+			return
 		}
 		dataDirectory := fmt.Sprintf("%s/terminaltype_data/", homeDir)
 		err = os.MkdirAll(dataDirectory, os.ModePerm)
 		if err != nil {
-			log.Fatalf("error, could not create data directory. Error: %v", err)
+			HandleUnexpectedError(nil, fmt.Errorf("error, could not create data directory. Error: %v", err))
+			return
 		}
 		dbFile := fmt.Sprintf("%s%s", dataDirectory, "data")
 		_, err = os.Stat(dbFile)
@@ -126,20 +161,24 @@ func main() {
 			var file *os.File
 			file, err = os.Create(dbFile)
 			if err != nil {
-				log.Fatalf("error, when creating db file. Error: %v", err)
+				HandleUnexpectedError(nil, fmt.Errorf("error, when creating db file. Error: %v", err))
+				return
 			}
 			file.Close()
 		} else if err != nil {
 			// An error other than the file not existing occurred
-			log.Fatalf("error, when checking db file exists. Error: %v", err)
+			HandleUnexpectedError(nil, fmt.Errorf("error, when checking db file exists. Error: %v", err))
+			return
 		}
 		database, err = sql.Open("sqlite3", dbFile)
 		if err != nil {
-			log.Fatalf("error, when establishing connection with sqlite db. Error: %v", err)
+			HandleUnexpectedError(nil, fmt.Errorf("error, when establishing connection with sqlite db. Error: %v", err))
+			return
 		}
 		err = processSchemaChanges(databaseFiles)
 		if err != nil {
-			log.Fatalf("error, when processing schema changes. Error: %v", err)
+			HandleUnexpectedError(nil, fmt.Errorf("error, when processing schema changes. Error: %v", err))
+			return
 		}
 
 		s, err := wish.NewServer(
@@ -160,7 +199,8 @@ func main() {
 			),
 		)
 		if err != nil {
-			log.Fatalf("error, starting ssh server. Error: %v", err)
+			HandleUnexpectedError(nil, fmt.Errorf("error, starting ssh server. Error: %v", err))
+			return
 		}
 
 		textBaseStyle = lipgloss.NewStyle().Width(typingTestDesiredWidth)
@@ -172,14 +212,16 @@ func main() {
 		go func() {
 			err2 := ensureEnoughGeneratedText(ctx)
 			if err2 != nil {
-				log.Fatalf("error, when ensureEnoughGeneratedText() for main(). Error: %v", err2)
+				HandleUnexpectedError(nil, fmt.Errorf("error, when ensureEnoughGeneratedText() for main(). Error: %v", err2))
+				return
 			}
 		}()
 
 		go func() {
 			log.Printf("listening for ssh requests")
 			if err3 := s.ListenAndServe(); err3 != nil && !errors.Is(err3, ssh.ErrServerClosed) {
-				log.Fatalf("error, starting http server. Error: %v", err3)
+				HandleUnexpectedError(nil, fmt.Errorf("error, starting http server. Error: %v", err3))
+				return
 			}
 		}()
 
@@ -192,7 +234,8 @@ func main() {
 			log.Printf("listening for http requests")
 			err4 := http.ListenAndServe(":"+httpPort, nil)
 			if err4 != nil {
-				log.Fatalf("error, when serving http. Error: %v", err4)
+				HandleUnexpectedError(nil, fmt.Errorf("error, when serving http. Error: %v", err4))
+				return
 			}
 		}()
 
@@ -271,4 +314,12 @@ func (m *model) resetSpinner() {
 	s := spinner.New()
 	s.Spinner = spinner.Moon
 	m.spinner = s
+}
+
+func HandleUnexpectedError(w http.ResponseWriter, err error) {
+	sentry.CaptureException(err)
+	log.Printf("ERROR: %v", err)
+	if w != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+	}
 }
