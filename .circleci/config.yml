@@ -45,7 +45,7 @@ jobs:
       - setup_remote_docker:
           docker_layer_caching: true
       - run:
-          command: cd "./infrastructure/terraform/live/${TF_VAR_environment}/main" && ../deploy.sh
+          command: cd "./terraform/live/${TF_VAR_environment}/main" && ../deploy.sh
 
 
 
