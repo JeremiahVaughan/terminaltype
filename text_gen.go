@@ -169,6 +169,7 @@ LIMIT 1`,
 var makeTextNotWeirdMap = map[string]string{
 	`”`: `"`,
 	`“`: `"`,
+	`’`: `'`,
 	"À": "A",
 	"Á": "A",
 	"Â": "A",

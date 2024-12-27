@@ -106,6 +106,10 @@ func main() {
 		if hostKey == "" {
 			log.Fatalf("error, you must provide the HOST_KEY env var")
 		}
+		decodedKey, err := base64.StdEncoding.DecodeString(hostKey)
+		if err != nil {
+			log.Fatalf("error, unable to parse HOST_KEY env var. Error: %v", err)
+		}
 
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
@@ -138,10 +142,6 @@ func main() {
 			log.Fatalf("error, when processing schema changes. Error: %v", err)
 		}
 
-		decodedKey, err := base64.StdEncoding.DecodeString(hostKey)
-		if err != nil {
-			log.Fatalf("error, unable to parse HOST_KEY env var. Error: %v", err)
-		}
 		s, err := wish.NewServer(
 			wish.WithAddress(net.JoinHostPort("0.0.0.0", sshPort)),
 			wish.WithHostKeyPEM(decodedKey),

@@ -1,0 +1,104 @@
+version: 2.1
+
+jobs:
+  build:
+    docker:
+      - image: cimg/base:current
+        auth:
+          username: $TF_VAR_docker_user
+          password: $TF_VAR_docker_token
+    resource_class: arm.medium  # Specify ARM resource class
+    steps:
+      - checkout
+      - setup_remote_docker:
+          docker_layer_caching: true
+      - run:
+          command: |
+            ./deploy.sh
+  deploy:
+    docker:
+      - image: piegarden/file_mover:8.2
+        auth:
+          username: $TF_VAR_docker_user
+          password: $TF_VAR_docker_token
+    steps:
+      - checkout
+      - setup_remote_docker:
+          docker_layer_caching: true
+      - run:
+          name: Deploy new version
+          command: |
+            echo "$TF_VAR_backend_deployment_ssh_private_key" | base64 -d > .key && chmod 600 .key
+            echo "$TF_VAR_backend_deployment_ssh_public_known_host" | base64 -d > ~/.ssh/known_hosts
+            ssh -i ./.key "piegarden@$TF_VAR_backend_public_ip" "mkdir -p ${TF_VAR_domain_name_terminal_type}/session_data"
+            printenv > .env
+            scp -i ./.key docker-compose.yaml .env "piegarden@${TF_VAR_backend_public_ip}:${TF_VAR_domain_name_terminal_type}"
+            ssh -i ./.key "piegarden@${TF_VAR_backend_public_ip}" "cd ${TF_VAR_domain_name_terminal_type} && sudo docker compose -p "${TF_VAR_environment}" down || true && sudo docker compose -p "${TF_VAR_environment}" up -d"
+  infra:
+    docker:
+      - image: alpine/terragrunt
+        auth:
+          username: $TF_VAR_docker_user
+          password: $TF_VAR_docker_token
+    steps:
+      - checkout
+      - setup_remote_docker:
+          docker_layer_caching: true
+      - run:
+          command: cd "./infrastructure/terraform/live/${TF_VAR_environment}/main" && ../deploy.sh
+
+
+
+workflows:
+  deploy:
+    jobs:
+      - build:
+          name: "build production"
+          filters:
+            branches:
+              only: master
+          context:
+            - context-production
+            - context-docker-hub
+      - infra:
+          name: "infra production"
+          filters:
+            branches:
+              only: master
+          context:
+            - context-production
+            - context-docker-hub
+      - deploy:
+          name: "deploy production"
+          filters:
+            branches:
+              only: master
+          context:
+            - context-production
+          requires:
+            - "build production"
+      # - build:
+      #     name: "build staging"
+      #     filters:
+      #       branches:
+      #         only: staging
+      #     context:
+      #       - context-staging
+      #       - context-docker-hub
+      # - infra:
+      #     name: "infra staging"
+      #     filters:
+      #       branches:
+      #         only: staging
+      #     context:
+      #       - context-staging
+      #       - context-docker-hub
+      # - deploy:
+      #     name: "deploy staging"
+      #     filters:
+      #       branches:
+      #         only: staging
+      #     context:
+      #       - context-staging
+      #     requires:
+      #       - "build staging"

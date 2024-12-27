@@ -1,0 +1,27 @@
+services:
+  app:
+    image: "piegarden/terminaltype:${CIRCLE_WORKFLOW_ID}"
+    container_name: "${TF_VAR_environment}"
+    environment:
+      TF_VAR_test_mode: "${TF_VAR_test_mode}"
+      TF_VAR_openai_api_key: "${TF_VAR_openai_api_key}"
+      TF_VAR_ssh_port: "${TF_VAR_ssh_port}"
+      TF_VAR_http_port: "${TF_VAR_http_port}"
+      TF_VAR_number_of_sentences_per_typing_test: "${TF_VAR_number_of_sentences_per_typing_test}"
+      TF_VAR_typing_test_desired_width: "${TF_VAR_typing_test_desired_width}"
+      TF_VAR_host_key: "${TF_VAR_host_key}"
+      TF_VAR_domain_name_terminal_type: "${TF_VAR_domain_name_terminal_type}"
+      TF_VAR_environment: "${TF_VAR_environment}"
+      TF_VAR_sentry_end_point: "${TF_VAR_sentry_end_point}"
+      TF_VAR_version: "${CIRCLE_WORKFLOW_ID}"
+    restart: always
+    networks:
+      - default
+      - shared
+    volumes:
+      - "./session_data:/session_data"
+
+networks:
+  default:
+  shared:
+    external: true

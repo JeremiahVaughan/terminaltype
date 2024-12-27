@@ -261,7 +261,6 @@ func applyTextColors(text string, unitSeparator string) string {
 		switch i {
 		case 0:
 			b.WriteString(renderAndTrim(p, false, correctStyle.Render))
-
 		case 1:
 			if len(parts) == 3 {
 				p = strings.ReplaceAll(p, " ", "_")
