@@ -1,7 +1,7 @@
 services:
   app:
     image: "piegarden/terminaltype:${CIRCLE_WORKFLOW_ID}"
-    container_name: "${TF_VAR_environment}"
+    container_name: "${TF_VAR_environment}-terminaltype"
     environment:
       TF_VAR_test_mode: "${TF_VAR_test_mode}"
       TF_VAR_openai_api_key: "${TF_VAR_openai_api_key}"
