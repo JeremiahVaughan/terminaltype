@@ -30,10 +30,10 @@ jobs:
           command: |
             echo "$TF_VAR_backend_deployment_ssh_private_key" | base64 -d > .key && chmod 600 .key
             echo "$TF_VAR_backend_deployment_ssh_public_known_host" | base64 -d > ~/.ssh/known_hosts
-            ssh -i ./.key "piegarden@$TF_VAR_backend_public_ip" "mkdir -p ${TF_VAR_domain_name_terminal_type}/session_data"
+            ssh -p 2222 -i ./.key "piegarden@$TF_VAR_backend_public_ip" "mkdir -p ${TF_VAR_domain_name_terminal_type}/session_data"
             printenv > .env
-            scp -i ./.key docker-compose.yaml .env "piegarden@${TF_VAR_backend_public_ip}:${TF_VAR_domain_name_terminal_type}"
-            ssh -i ./.key "piegarden@${TF_VAR_backend_public_ip}" "cd ${TF_VAR_domain_name_terminal_type} && sudo docker compose -p "${TF_VAR_environment}" down || true && sudo docker compose -p "${TF_VAR_environment}" up -d"
+            scp -P 2222 -i ./.key docker-compose.yaml .env "piegarden@${TF_VAR_backend_public_ip}:${TF_VAR_domain_name_terminal_type}"
+            ssh -p 2222 -i ./.key "piegarden@${TF_VAR_backend_public_ip}" "cd ${TF_VAR_domain_name_terminal_type} && sudo docker compose -p "${TF_VAR_environment}" down || true && sudo docker compose -p "${TF_VAR_environment}" up -d"
   infra:
     docker:
       - image: alpine/terragrunt
