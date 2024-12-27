@@ -47,6 +47,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, m.spinner.Tick
 				}
 			case tea.KeyCtrlW:
+				// todo punctuation needs to stagger ctrl W, like it does in vim
+				// todo consider making commas, periods, and spaces at the end of the word not part of the word itself so they don't cause the adjecent word to also become incorrect
 				if m.activeView == activeViewRace {
 					i := m.incorrectPos
 					j := 0
@@ -156,16 +158,23 @@ func fetchRaceWords() (string, int, error) {
 	if totalSentences <= sentencesPerTypingTest {
 		return "", 0, fmt.Errorf("error, more sentences need to generate, please wait.")
 	}
-	var randomSentences []any
+	randomSentences := make([]any, sentencesPerTypingTest)
+	i := 0
 	for {
 		randomSentence := rand.Intn(totalSentences) + 1
+		duplicateFound := false
 		for _, r := range randomSentences {
 			if r == randomSentence {
-				continue
+				duplicateFound = true
+				break
 			}
 		}
-		randomSentences = append(randomSentences, randomSentence)
-		if len(randomSentences) >= sentencesPerTypingTest {
+		if duplicateFound {
+			continue
+		}
+		randomSentences[i] = randomSentence
+		i++
+		if i >= sentencesPerTypingTest {
 			break
 		}
 	}
@@ -201,7 +210,7 @@ func fetchRaceWords() (string, int, error) {
 	}
 
 	queryResults := make([]string, sentencesPerTypingTest)
-	i := 0
+	i = 0
 	for rows.Next() {
 		var theQueryResult string
 		err = rows.Scan(
