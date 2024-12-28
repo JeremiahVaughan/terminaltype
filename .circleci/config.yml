@@ -33,7 +33,7 @@ jobs:
             ssh -p 2222 -i ./.key "piegarden@$TF_VAR_static_ip" "mkdir -p ${TF_VAR_domain_name_terminal_type}/session_data"
             printenv > .env
             scp -P 2222 -i ./.key docker-compose.yaml .env "piegarden@${TF_VAR_static_ip}:${TF_VAR_domain_name_terminal_type}"
-            ssh -p 2222 -i ./.key "piegarden@${TF_VAR_static_ip}" "cd ${TF_VAR_domain_name_terminal_type} && sudo docker compose -p "${TF_VAR_environment}" down || true && sudo docker compose -p "${TF_VAR_environment}" up -d"
+            ssh -p 2222 -i ./.key "piegarden@${TF_VAR_static_ip}" "cd ${TF_VAR_domain_name_terminal_type} && sudo docker compose -p "${TF_VAR_environment}-terminaltype" down || true && sudo docker compose -p "${TF_VAR_environment}-terminaltype" up -d"
   infra:
     docker:
       - image: alpine/terragrunt
