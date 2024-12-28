@@ -84,30 +84,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 					} else if m.correctPos < len(m.raceWordsCharSlice) && m.incorrectPos < len(m.raceWordsCharSlice) {
 						keyMsg := msg.String()
-						if keyMsg == m.raceWordsCharSlice[m.correctPos] {
-							m.correctPos++
-							m.incorrectPos = m.correctPos // stay in sync
-							if m.correctPos >= len(m.raceWordsCharSlice) {
-								m.wordsPerMin = calculateWordsPerMin(
-									m.raceStartTime,
-									time.Now().UnixMilli(),
-									m.data.wordCount,
-								)
-								m.activeView = activeViewRaceFinished
-							}
-						} else {
-							i := m.incorrectPos
-							for i > 0 && m.data.raceWords[i-1] != ' ' {
-								i--
-							}
-							m.correctPos = i
-							m.incorrectPos++
-						}
+						m = evaluateTypedKeyMatch(m, keyMsg)
 					}
 				}
 			}
 		}
-
 	case spinner.TickMsg:
 		select {
 		case md := <-loadingFinished:
@@ -127,6 +108,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.termWidth = msg.Width
 		m.termHeight = msg.Height
+	default:
+		// one use case so far for unexpected messages is holding down shift and pressing space bar.
+		// I want this just to represent a space bar push so I am handling it as such.
+		m = evaluateTypedKeyMatch(m, " ")
 	}
 	return m, cmd
 	// #####
@@ -317,4 +302,27 @@ func calculateWordsPerMin(startTimeMillis int64, endTimeMillis int64,
 
 	wordsPerMin := float64(wordsTyped) / timeDifferenceMinutes
 	return int(wordsPerMin + 0.5) // Round to the nearest whole number
+}
+
+func evaluateTypedKeyMatch(m model, keyMsg string) model {
+	if keyMsg == m.raceWordsCharSlice[m.correctPos] {
+		m.correctPos++
+		m.incorrectPos = m.correctPos // stay in sync
+		if m.correctPos >= len(m.raceWordsCharSlice) {
+			m.wordsPerMin = calculateWordsPerMin(
+				m.raceStartTime,
+				time.Now().UnixMilli(),
+				m.data.wordCount,
+			)
+			m.activeView = activeViewRaceFinished
+		}
+	} else {
+		i := m.incorrectPos
+		for i > 0 && m.data.raceWords[i-1] != ' ' {
+			i--
+		}
+		m.correctPos = i
+		m.incorrectPos++
+	}
+	return m
 }
