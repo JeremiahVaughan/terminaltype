@@ -12,7 +12,7 @@ func (m model) View() string {
 	case activeViewWelcome:
 		if m.loading {
 			s := m.spinner.View()
-			content = fmt.Sprintf("%s starting race %s", s, s)
+			content = fmt.Sprintf("%s starting race in %s or sooner %s", s, m.raceStartTimer.View(), s)
 		} else {
 			content = ` .----------------.  .----------------.  .----------------.  .----------------.   
 | .--------------. || .--------------. || .--------------. || .--------------. |  
@@ -28,7 +28,7 @@ func (m model) View() string {
 
 
 
-PRESS ENTER TO START
+(PRESS ENTER TO START)
 
 
 
@@ -51,7 +51,7 @@ PRESS ENTER TO START
 			m.incorrectPos,
 		)
 	case activeViewRaceFinished:
-		content = fmt.Sprintf("Words Per Min: %d", m.wordsPerMin)
+		content = fmt.Sprintf("Words Per Min: %d\n\n(PRESS ENTER TO PLAY AGAIN)", m.wordsPerMin)
 	}
 	return m.renderer.Place(
 		m.termWidth,

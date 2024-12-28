@@ -1,14 +1,22 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"database/sql"
+	"encoding/binary"
+	"errors"
 	"fmt"
 	"log"
 	"math/rand"
 	"strings"
 	"time"
 
+	"github.com/nats-io/nats.go"
+
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/stopwatch"
+	"github.com/charmbracelet/bubbles/timer"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -36,15 +44,68 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case tea.KeyCtrlC:
 				return m, tea.Quit
 			case tea.KeyEnter:
-				if m.activeView == activeViewWelcome {
+				if m.activeView == activeViewWelcome || m.activeView == activeViewRaceFinished {
 					m.loading = true
 					md := m.data
+					var swCmd tea.Cmd
+					if m.raceTicker == nil {
+						newWatch := stopwatch.New()
+						m.raceTicker = &newWatch
+						swCmd = m.raceTicker.Init()
+					}
+					cmd = tea.Batch(cmd, swCmd)
+					m.natsConnection, m.data.err = connectToNats()
+					if m.data.err != nil {
+						m.data.err = fmt.Errorf("error, when connectToNats() for Update(). Error: %v", m.data.err)
+						HandleUnexpectedError(nil, m.data.err)
+						return m, cmd
+					}
+					// todo figure out the correct way to determine this channels buffer size
+					m.allRacerProgressChan = make(chan *nats.Msg, 30)
+					m.raceCtx, m.raceCancel = context.WithCancel(m.ctx)
+					go monitorRaceProgression(
+						m.raceCtx,
+						m.natsConnection,
+						m.data.raceId,
+						m.allRacerProgressChan,
+					)
+					m.raceStartTimer = timer.NewWithInterval(time.Duration(raceStartTimeoutInSeconds)*time.Second, time.Second)
+					m.raceStartTimer.Init()
 					go func() {
-						// start race, for now but todo try to join one first if one is available
-						md.raceWords, md.wordCount, md.err = fetchRaceWords()
+						var sub *nats.Subscription
+						sub, md.err = m.natsConnection.SubscribeSync(m.fingerprint)
 						if md.err != nil {
-							md.err = fmt.Errorf("error, when fetchRaceWords() for Update(). Error: %v", md.err)
+							md.err = fmt.Errorf("error, when subscribing to registration queue for Update(). Error: %v", md.err)
+						} else {
+							// waits for twice as long as the race timeout and then assumes failure
+							sendMsg := nats.Msg{
+								Subject: raceRegistrationRequestQueueId,
+								Data:    []byte(m.fingerprint),
+							}
+							md.err = m.natsConnection.PublishMsg(&sendMsg)
+							if md.err != nil {
+								md.err = fmt.Errorf("error, when publishing registation request message for Update(). Error: %v", md.err)
+							} else {
+								raceStartTimeout := time.Duration(raceStartTimeoutInSeconds) * 2 * time.Second
+								var subMsg *nats.Msg
+								subMsg, md.err = sub.NextMsg(raceStartTimeout)
+								if md.err != nil {
+									md.err = fmt.Errorf("error, when retrieving registration response message for Update(). Error: %v", md.err)
+								} else {
+									var reg RaceRegistration
+									reg, md.err = decodeRaceRegistration(subMsg.Data)
+									if md.err != nil {
+										md.err = fmt.Errorf("error, when decoding registration response message for Update(). Error: %v", md.err)
+									} else {
+										md.raceId = reg.raceId
+										md.raceWords = reg.raceWords
+										md.wordCount = reg.wordCount
+										md.allRacerProgress = reg.allRaceProgress
+									}
+								}
+							}
 						}
+
 						loadingFinished <- md
 					}()
 					return m, m.spinner.Tick
@@ -92,6 +153,33 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
+	case stopwatch.TickMsg:
+		rp := RaceProgress{
+			racerId:            m.racerId,
+			percentageComplete: int8(m.correctPos / len(m.raceWordsCharSlice)),
+		}
+		var raceCompletionPercentage []byte
+		raceCompletionPercentage, m.data.err = encodeRaceProgress(rp)
+		if m.data.err != nil {
+			m.data.err = fmt.Errorf("error, when encodeRaceProgress() for Update(). Error: %v", m.data.err)
+			HandleUnexpectedError(nil, m.data.err)
+			return m, cmd
+		}
+		m.data.err = m.natsConnection.Publish(m.data.raceId, raceCompletionPercentage)
+		if m.data.err != nil {
+			m.data.err = fmt.Errorf("error, when attempting to publish the message for Update(). Error: %v", m.data.err)
+			HandleUnexpectedError(nil, m.data.err)
+			return m, cmd
+		}
+		m.data.allRacerProgress, m.data.err = processRacerProgressMsgs(m.allRacerProgressChan, m.data.allRacerProgress)
+		if m.data.err != nil {
+			m.data.err = fmt.Errorf("error, when processRacerProgressMsgs for Update(). Error: %v", m.data.err)
+			HandleUnexpectedError(nil, m.data.err)
+			return m, cmd
+		}
+	case timer.TickMsg:
+		m.raceStartTimer, cmd = m.raceStartTimer.Update(msg)
+		return m, cmd
 	case spinner.TickMsg:
 		select {
 		case md := <-loadingFinished:
@@ -138,7 +226,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// race should end for individuals once they have completed, which means they don't have to wait for other racers to finish before they can start another race
 }
 
-func fetchRaceWords() (string, int, error) {
+func fetchRaceWords() (string, int8, error) {
 	totalSentences, err := fetchNumberOfGeneratedSentences()
 	if err != nil {
 		return "", 0, fmt.Errorf("error, when fetchNumberOfGeneratedSentences() for fetchRaceWords(). Error: %v", err)
@@ -219,7 +307,7 @@ func fetchRaceWords() (string, int, error) {
 	builder.WriteRune('.')
 	text := builder.String()
 	wordCount := len(strings.Split(text, " ")) // todo consider saving the word count in the DB to speed up game start times
-	return text, wordCount, nil
+	return text, int8(wordCount), nil
 }
 
 func formatWordBlock(
@@ -291,7 +379,7 @@ func insert(slice []string, index int, value string) []string {
 }
 
 func calculateWordsPerMin(startTimeMillis int64, endTimeMillis int64,
-	wordsTyped int) int {
+	wordsTyped int8) int {
 	// Calculate the time difference in milliseconds
 	timeDifferenceMillis := endTimeMillis - startTimeMillis
 
@@ -318,6 +406,13 @@ func evaluateTypedKeyMatch(m model, keyMsg string) model {
 				m.data.wordCount,
 			)
 			m.activeView = activeViewRaceFinished
+			go func() {
+				err := incrementRaceCompletionCount(m.fingerprint)
+				if err != nil {
+					HandleUnexpectedError(nil, fmt.Errorf("error, when incrementRaceCompletionCount() for evaluateTypedKeyMatch(). Error: %v", err))
+					// can continue if this error happens because its not the end of the world, but still needs to be reported
+				}
+			}()
 		}
 	} else {
 		i := m.incorrectPos
@@ -328,4 +423,163 @@ func evaluateTypedKeyMatch(m model, keyMsg string) model {
 		m.incorrectPos++
 	}
 	return m
+}
+
+func incrementRaceCompletionCount(userFingerprint string) error {
+	count, err := fetchCurrentRaceCompletionCount(userFingerprint)
+	if err != nil {
+		return fmt.Errorf("error, when fetchCurrentRaceCompletionCount() for incrementRaceCompletionCount(). Error: %v", err)
+	}
+	count++
+	if count == 1 {
+		_, err = database.Exec(
+			`INSERT INTO person_who_types (ssh_finger_print, typing_test_completion_count)
+VALUES (?, ?)`,
+			userFingerprint,
+			count,
+		)
+		if err != nil {
+			return fmt.Errorf("error, during insert for incrementRaceCompletionCount(). Error: %v", err)
+		}
+	} else {
+		_, err = database.Exec(
+			`UPDATE person_who_types 
+SET typing_test_completion_count = ?
+WHERE ssh_finger_print = ?`,
+			count,
+			userFingerprint,
+		)
+		if err != nil {
+			return fmt.Errorf("error, during update for incrementRaceCompletionCount(). Error: %v", err)
+		}
+	}
+	return nil
+}
+
+func fetchCurrentRaceCompletionCount(userFingerprint string) (int, error) {
+	var result int
+	err := database.QueryRow(
+		`SELECT typing_test_completion_count
+FROM person_who_types
+WHERE ssh_finger_print = ?`,
+		userFingerprint,
+	).Scan(
+		&result,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, nil
+		} else {
+			return 0, fmt.Errorf("error, when attempting to execute sql statement: %v", err)
+		}
+	}
+	return result, nil
+}
+
+type RaceRegistration struct {
+	raceWords       string
+	wordCount       int8
+	raceId          string
+	allRaceProgress []RaceProgress
+}
+
+type RaceProgress struct {
+	racerId            int8
+	fingerprint        string
+	percentageComplete int8
+}
+
+func encodeRaceProgress(rp RaceProgress) ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, rp)
+	if err != nil {
+		return nil, fmt.Errorf("error, when writing bytes for encodeRaceProgress(). Error: %v", err)
+	}
+	return buf.Bytes(), nil
+}
+
+func encodeAllRaceProgress(rp []RaceProgress) ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, rp)
+	if err != nil {
+		return nil, fmt.Errorf("error, when writing bytes for encodeAllRaceProgress(). Error: %v", err)
+	}
+	return buf.Bytes(), nil
+}
+
+func encodeRaceRegistration(r RaceRegistration) ([]byte, error) {
+	buf := new(bytes.Buffer)
+	err := binary.Write(buf, binary.LittleEndian, r)
+	if err != nil {
+		return nil, fmt.Errorf("error, when writing bytes for encodeRaceRegistration(). Error: %v", err)
+	}
+	return buf.Bytes(), nil
+}
+
+func decodeRaceProgress(data []byte) (RaceProgress, error) {
+	var rp RaceProgress
+	reader := bytes.NewReader(data)
+	if err := binary.Read(reader, binary.LittleEndian, &rp); err != nil {
+		return RaceProgress{}, fmt.Errorf("error, when reading bytes for decodeRaceProgress(). Error: %v", err)
+	}
+	return rp, nil
+}
+
+func decodeAllRaceProgress(data []byte) ([]RaceProgress, error) {
+	var rp []RaceProgress
+	reader := bytes.NewReader(data)
+	if err := binary.Read(reader, binary.LittleEndian, &rp); err != nil {
+		return nil, fmt.Errorf("error, when reading bytes for decodeAllRaceProgress(). Error: %v", err)
+	}
+	return rp, nil
+}
+
+func decodeRaceRegistration(data []byte) (RaceRegistration, error) {
+	var r RaceRegistration
+	reader := bytes.NewReader(data)
+	if err := binary.Read(reader, binary.LittleEndian, &r); err != nil {
+		return RaceRegistration{}, fmt.Errorf("error, when reading bytes for decodeRaceRegistration(). Error: %v", err)
+	}
+	return r, nil
+}
+
+func monitorRaceProgression(
+	raceCtx context.Context,
+	raceNatsConnection *nats.Conn,
+	raceId string,
+	allRacerProgressChan chan *nats.Msg,
+) {
+	sub, err := raceNatsConnection.ChanSubscribe(raceId, allRacerProgressChan)
+	if err != nil {
+		err = fmt.Errorf("error, when nats.Conn.ChanSubscribe() for monitorRaceProgression(). Error: %v", err)
+		HandleUnexpectedError(nil, err)
+		return
+	}
+	<-raceCtx.Done()
+	err = sub.Unsubscribe()
+	if err != nil {
+		err = fmt.Errorf("error, when unsubscribing for monitorRaceProgression(). Error: %v", err)
+		HandleUnexpectedError(nil, err)
+		return
+	}
+	return
+}
+
+func processRacerProgressMsgs(messages chan *nats.Msg, progress []RaceProgress) ([]RaceProgress, error) {
+	for {
+		select {
+		case natsMsg, ok := <-messages:
+			if !ok {
+				// Channel is closed, exit the loop
+				return progress, nil
+			}
+			p, err := decodeRaceProgress(natsMsg.Data)
+			if err != nil {
+				return nil, fmt.Errorf("error, when decodeRaceProgress() for processRacerProgressMsgs(). Error: %v", err)
+			}
+			progress[p.racerId] = p
+		default:
+			return progress, nil
+		}
+	}
 }
