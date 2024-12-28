@@ -24,6 +24,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch msg := msg.(type) {
+	case tea.MouseMsg:
+		// Ignore all mouse messages, this is a typing game
+		return m, nil
 	case tea.KeyMsg:
 		// ignore key presses if loading
 		if !m.loading {
