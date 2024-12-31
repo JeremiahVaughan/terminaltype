@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/muesli/termenv"
 	"log"
 	"net"
 	"net/http"
@@ -16,6 +15,11 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/charmbracelet/bubbles/progress"
+	"github.com/charmbracelet/bubbles/stopwatch"
+	"github.com/charmbracelet/bubbles/timer"
+	"github.com/muesli/termenv"
 
 	"database/sql"
 	"embed"
@@ -33,8 +37,12 @@ import (
 	"github.com/google/uuid"
 	openai "github.com/sashabaranov/go-openai"
 	gossh "golang.org/x/crypto/ssh"
+
+	"github.com/nats-io/nats-server/v2/server"
+	"github.com/nats-io/nats.go"
 )
 
+var ns *server.Server
 var database *sql.DB
 var chatClient *openai.Client
 var loadingFinished = make(chan modelData, 1)
@@ -45,6 +53,18 @@ var correctStyle lipgloss.Style
 var incorrectStyle lipgloss.Style
 var regularStyle lipgloss.Style
 var cursorStyle lipgloss.Style
+
+var raceStartTimeoutInSeconds = 10
+var maxPlayersPerRace = int8(5)
+var playerColors = []string{
+	"#00ff00",
+	"#ff5600",
+	"#0000ff",
+	"#ffff00",
+	"#ff00ff",
+}
+
+const raceRegistrationRequestQueueId = "req_race_reg"
 
 //go:embed schema/*
 var databaseFiles embed.FS
@@ -132,6 +152,35 @@ func main() {
 				return
 			}
 		}
+
+		raceStartTimeoutInSecondsString := os.Getenv("TF_VAR_race_start_timeout_in_seconds")
+		if raceStartTimeoutInSecondsString != "" {
+			raceStartTimeoutInSeconds, err = strconv.Atoi(raceStartTimeoutInSecondsString)
+			if err != nil {
+				HandleUnexpectedError(nil, fmt.Errorf("error, unable to parse value provided for TF_VAR_race_start_timeout_in_seconds. Provided: %v", raceStartTimeoutInSecondsString))
+				return
+			}
+			if raceStartTimeoutInSeconds < 3 {
+				HandleUnexpectedError(nil, fmt.Errorf("error, invalid value provided for TF_VAR_race_start_timeout_in_seconds. Provided: %d", raceStartTimeoutInSeconds))
+				return
+			}
+		}
+
+		maxPlayersPerRaceString := os.Getenv("TF_VAR_max_players_per_race")
+		if maxPlayersPerRaceString != "" {
+			var mp int64
+			mp, err = strconv.ParseInt(maxPlayersPerRaceString, 10, 8)
+			if err != nil {
+				HandleUnexpectedError(nil, fmt.Errorf("error, unable to parse value provided for TF_VAR_max_players_per_race. Provided: %v", maxPlayersPerRaceString))
+				return
+			}
+			maxPlayersPerRace = int8(mp)
+			if maxPlayersPerRace < 1 {
+				HandleUnexpectedError(nil, fmt.Errorf("error, invalid value provided for TF_VAR_max_players_per_race. Provided: %d", maxPlayersPerRace))
+				return
+			}
+		}
+
 		hostKey := os.Getenv("TF_VAR_host_key")
 		if hostKey == "" {
 			HandleUnexpectedError(nil, errors.New("error, you must provide the TF_VAR_host_key env var"))
@@ -140,6 +189,12 @@ func main() {
 		decodedKey, err := base64.StdEncoding.DecodeString(hostKey)
 		if err != nil {
 			HandleUnexpectedError(nil, fmt.Errorf("error, unable to parse TF_VAR_host_key env var. Error: %v", err))
+			return
+		}
+
+		err = initNats()
+		if err != nil {
+			HandleUnexpectedError(nil, fmt.Errorf("error, when initNats() for main(). Error: %v", err))
 			return
 		}
 
@@ -209,6 +264,14 @@ func main() {
 		cursorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color("#ffffff"))
 
 		go func() {
+			err1 := handleRaceRegistration(ctx)
+			if err1 != nil {
+				HandleUnexpectedError(nil, fmt.Errorf("error, when handleRaceRegistration() for main(). Error: %v", err1))
+				return
+			}
+		}()
+
+		go func() {
 			err2 := ensureEnoughGeneratedText(ctx)
 			if err2 != nil {
 				HandleUnexpectedError(nil, fmt.Errorf("error, when ensureEnoughGeneratedText() for main(). Error: %v", err2))
@@ -268,26 +331,37 @@ func teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 }
 
 type model struct {
-	context            context.Context
-	renderer           *lipgloss.Renderer
-	fingerprint        string
-	activeView         activeView
-	loading            bool
-	spinner            spinner.Model
-	data               modelData
-	raceWordsCharSlice []string
-	termWidth          int
-	termHeight         int
-	correctPos         int
-	incorrectPos       int
-	raceStartTime      int64
-	wordsPerMin        int
+	ctx                  context.Context
+	renderer             *lipgloss.Renderer
+	fingerprint          string
+	activeView           activeView
+	loading              bool
+	raceTicker           *stopwatch.Model
+	raceStartCountDown   timer.Model
+	natsConnection       *nats.Conn
+	racerId              int8
+	allRacerProgressChan chan *nats.Msg
+	racerProgressBars    []progress.Model
+	raceCtx              context.Context // used for cleaning up all resources used in the race
+	raceCancel           context.CancelFunc
+	spinner              spinner.Model
+	data                 modelData
+	raceWordsCharSlice   []string
+	termWidth            int
+	termHeight           int
+	correctPos           int
+	incorrectPos         int
+	raceStartTime        int64
+	wordsPerMin          int
 }
 
 type modelData struct {
-	err       error
-	raceWords string
-	wordCount int
+	err              error
+	raceWords        string
+	wordCount        int8
+	raceId           string // also the fingerprint print of user in the first race slot
+	racerCount       int8
+	allRacerProgress []RaceProgress
 }
 
 func NewModel(
@@ -296,7 +370,7 @@ func NewModel(
 ) tea.Model {
 	ctx := context.Background()
 	m := model{
-		context:     ctx,
+		ctx:         ctx,
 		renderer:    renderer,
 		fingerprint: fingerprint,
 		activeView:  activeViewWelcome,
@@ -307,6 +381,48 @@ func NewModel(
 
 func (m model) Init() tea.Cmd {
 	return nil
+}
+
+func initNats() error {
+	// Configure NATS Server options
+	opts := &server.Options{
+		Port: -1, // Let the server pick an available port
+		// You can set other options here (e.g., authentication, clustering)
+	}
+
+	// Create a new NATS server instance
+	var err error
+	ns, err = server.NewServer(opts)
+	if err != nil {
+		return fmt.Errorf("error, when creating NATS server. Error: %v", err)
+	}
+
+	// Start the server in a separate goroutine
+	go ns.Start()
+
+	// Ensure the server has started
+	if !ns.ReadyForConnections(10 * time.Second) {
+		return errors.New("error, NATS Server didn't start in time")
+	}
+
+	// Retrieve the server's listen address
+	addr := ns.Addr()
+	var port int
+	if tcpAddr, ok := addr.(*net.TCPAddr); ok {
+		port = tcpAddr.Port
+	} else {
+		return fmt.Errorf("error, filed to get nats server port")
+	}
+	fmt.Printf("NATS server is running on port %d\n", port)
+	return nil
+}
+
+func connectToNats() (*nats.Conn, error) {
+	nc, err := nats.Connect(ns.ClientURL())
+	if err != nil {
+		return nil, fmt.Errorf("error, when connecting to NATS server. Error: %v", err)
+	}
+	return nc, nil
 }
 
 func (m *model) resetSpinner() {
@@ -321,4 +437,78 @@ func HandleUnexpectedError(w http.ResponseWriter, err error) {
 	if w != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 	}
+}
+
+func handleRaceRegistration(ctx context.Context) error {
+	conn, err := connectToNats()
+	if err != nil {
+		return fmt.Errorf("error, when connectToNats() for handleRaceRegistration(). Error: %v", err)
+	}
+	subChan := make(chan *nats.Msg)
+	sub, err := conn.ChanSubscribe(raceRegistrationRequestQueueId, subChan)
+	if err != nil {
+		return fmt.Errorf("error, when setting up subscription for handleRaceRegistration(). Error: %v", err)
+	}
+	defer sub.Unsubscribe()
+	defer close(subChan)
+	rr := RaceRegistration{
+		AllRaceProgress: make([]RaceProgress, maxPlayersPerRace),
+	}
+	for {
+		select {
+		case natsMsg := <-subChan:
+			f := string(natsMsg.Data)
+			rr.AllRaceProgress[rr.RacerCount].Fingerprint = f
+			rr.AllRaceProgress[rr.RacerCount].RacerId = int8(rr.RacerCount)
+			if rr.RacerCount == 0 {
+				rr.RaceId = f
+			} else {
+				rr.RaceId = rr.AllRaceProgress[0].Fingerprint
+			}
+			rr.RacerCount++
+			if rr.RacerCount == maxPlayersPerRace {
+				err = publishRace(conn, rr)
+				if err != nil {
+					return fmt.Errorf("error, when publishRace() for handleRaceRegistration() max player count was reached. Error: %v", err)
+				}
+				rr = RaceRegistration{
+					AllRaceProgress: make([]RaceProgress, maxPlayersPerRace),
+				}
+			}
+		case <-time.After(time.Duration(raceStartTimeoutInSeconds) * time.Second):
+			if rr.RacerCount != 0 {
+				err = publishRace(conn, rr)
+				if err != nil {
+					return fmt.Errorf("error, when publishRace() for handleRaceRegistration() after race timeout exceeded. Error: %v", err)
+				}
+				rr = RaceRegistration{
+					AllRaceProgress: make([]RaceProgress, maxPlayersPerRace),
+				}
+			}
+		case <-ctx.Done():
+			return nil
+		}
+	}
+}
+
+func publishRace(conn *nats.Conn, rr RaceRegistration) error {
+	// start race, for now but todo try to join one first if one is available
+	raceWords, wordCount, err := fetchRaceWords()
+	if err != nil {
+		err = fmt.Errorf("error, when fetchRaceWords() for publishRace(). Error: %v", err)
+	}
+	rr.RaceWords = raceWords
+	rr.WordCount = wordCount
+	encodedRace, err := encodeRaceRegistration(rr)
+	if err != nil {
+		return fmt.Errorf("error, when encodeAllRaceProgress() for handleRaceRegistration(). Error: %v", err)
+	}
+
+	for i := int8(0); i < rr.RacerCount; i++ {
+		err = conn.Publish(rr.AllRaceProgress[i].Fingerprint, encodedRace)
+		if err != nil {
+			return fmt.Errorf("error, when publishRace() for handleRaceRegistration(). Error: %v", err)
+		}
+	}
+	return nil
 }
