@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/stopwatch"
 	"github.com/charmbracelet/bubbles/timer"
 	"github.com/muesli/termenv"
@@ -52,8 +53,16 @@ var correctStyle lipgloss.Style
 var incorrectStyle lipgloss.Style
 var regularStyle lipgloss.Style
 var cursorStyle lipgloss.Style
+
 var raceStartTimeoutInSeconds = 10
-var maxPlayersPerRace = 5
+var maxPlayersPerRace = int8(5)
+var playerColors = []string{
+	"#00ff00",
+	"#ff5600",
+	"#0000ff",
+	"#ffff00",
+	"#ff00ff",
+}
 
 const raceRegistrationRequestQueueId = "req_race_reg"
 
@@ -159,11 +168,13 @@ func main() {
 
 		maxPlayersPerRaceString := os.Getenv("TF_VAR_max_players_per_race")
 		if maxPlayersPerRaceString != "" {
-			maxPlayersPerRace, err = strconv.Atoi(maxPlayersPerRaceString)
+			var mp int64
+			mp, err = strconv.ParseInt(maxPlayersPerRaceString, 10, 8)
 			if err != nil {
 				HandleUnexpectedError(nil, fmt.Errorf("error, unable to parse value provided for TF_VAR_max_players_per_race. Provided: %v", maxPlayersPerRaceString))
 				return
 			}
+			maxPlayersPerRace = int8(mp)
 			if maxPlayersPerRace < 1 {
 				HandleUnexpectedError(nil, fmt.Errorf("error, invalid value provided for TF_VAR_max_players_per_race. Provided: %d", maxPlayersPerRace))
 				return
@@ -326,10 +337,11 @@ type model struct {
 	activeView           activeView
 	loading              bool
 	raceTicker           *stopwatch.Model
-	raceStartTimer       timer.Model
+	raceStartCountDown   timer.Model
 	natsConnection       *nats.Conn
 	racerId              int8
 	allRacerProgressChan chan *nats.Msg
+	racerProgressBars    []progress.Model
 	raceCtx              context.Context // used for cleaning up all resources used in the race
 	raceCancel           context.CancelFunc
 	spinner              spinner.Model
@@ -348,6 +360,7 @@ type modelData struct {
 	raceWords        string
 	wordCount        int8
 	raceId           string // also the fingerprint print of user in the first race slot
+	racerCount       int8
 	allRacerProgress []RaceProgress
 }
 
@@ -432,46 +445,44 @@ func handleRaceRegistration(ctx context.Context) error {
 		return fmt.Errorf("error, when connectToNats() for handleRaceRegistration(). Error: %v", err)
 	}
 	subChan := make(chan *nats.Msg)
-	sub, err := conn.Subscribe(raceRegistrationRequestQueueId, func(msg *nats.Msg) {
-		subChan <- msg
-	})
+	sub, err := conn.ChanSubscribe(raceRegistrationRequestQueueId, subChan)
 	if err != nil {
 		return fmt.Errorf("error, when setting up subscription for handleRaceRegistration(). Error: %v", err)
 	}
 	defer sub.Unsubscribe()
+	defer close(subChan)
 	rr := RaceRegistration{
-		allRaceProgress: make([]RaceProgress, maxPlayersPerRace),
+		AllRaceProgress: make([]RaceProgress, maxPlayersPerRace),
 	}
-	i := 0
 	for {
 		select {
 		case natsMsg := <-subChan:
 			f := string(natsMsg.Data)
-			rr.allRaceProgress[i].fingerprint = f
-			rr.allRaceProgress[i].racerId = int8(i)
-			if i == 0 {
-				rr.raceId = f
+			rr.AllRaceProgress[rr.RacerCount].Fingerprint = f
+			rr.AllRaceProgress[rr.RacerCount].RacerId = int8(rr.RacerCount)
+			if rr.RacerCount == 0 {
+				rr.RaceId = f
+			} else {
+				rr.RaceId = rr.AllRaceProgress[0].Fingerprint
 			}
-			i++
-			if i == maxPlayersPerRace {
+			rr.RacerCount++
+			if rr.RacerCount == maxPlayersPerRace {
 				err = publishRace(conn, rr)
 				if err != nil {
 					return fmt.Errorf("error, when publishRace() for handleRaceRegistration() max player count was reached. Error: %v", err)
 				}
-				i = 0
 				rr = RaceRegistration{
-					allRaceProgress: make([]RaceProgress, maxPlayersPerRace),
+					AllRaceProgress: make([]RaceProgress, maxPlayersPerRace),
 				}
 			}
 		case <-time.After(time.Duration(raceStartTimeoutInSeconds) * time.Second):
-			if len(rr.allRaceProgress) != 0 {
+			if rr.RacerCount != 0 {
 				err = publishRace(conn, rr)
 				if err != nil {
 					return fmt.Errorf("error, when publishRace() for handleRaceRegistration() after race timeout exceeded. Error: %v", err)
 				}
-				i = 0
 				rr = RaceRegistration{
-					allRaceProgress: make([]RaceProgress, maxPlayersPerRace),
+					AllRaceProgress: make([]RaceProgress, maxPlayersPerRace),
 				}
 			}
 		case <-ctx.Done():
@@ -486,16 +497,17 @@ func publishRace(conn *nats.Conn, rr RaceRegistration) error {
 	if err != nil {
 		err = fmt.Errorf("error, when fetchRaceWords() for publishRace(). Error: %v", err)
 	}
-	rr.raceWords = raceWords
-	rr.wordCount = wordCount
+	rr.RaceWords = raceWords
+	rr.WordCount = wordCount
 	encodedRace, err := encodeRaceRegistration(rr)
 	if err != nil {
 		return fmt.Errorf("error, when encodeAllRaceProgress() for handleRaceRegistration(). Error: %v", err)
 	}
-	for _, p := range rr.allRaceProgress {
-		err = conn.Publish(p.fingerprint, encodedRace)
+
+	for i := int8(0); i < rr.RacerCount; i++ {
+		err = conn.Publish(rr.AllRaceProgress[i].Fingerprint, encodedRace)
 		if err != nil {
-			return fmt.Errorf("error, when publishing for handleRaceRegistration(). Error: %v", err)
+			return fmt.Errorf("error, when publishRace() for handleRaceRegistration(). Error: %v", err)
 		}
 	}
 	return nil
