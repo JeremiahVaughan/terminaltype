@@ -31,13 +31,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Ignore all mouse messages, this is a typing game
 		return m, nil
 	case tea.KeyMsg:
+		switch msg.Type {
+		case tea.KeyCtrlC:
+			return m, tea.Quit
+		}
 		// ignore key presses if loading
 		if !m.loading {
 			// reset any errors or validation messages on key press if not loading
 			m.data.err = nil
 			switch msg.Type {
-			case tea.KeyCtrlC:
-				return m, tea.Quit
 			case tea.KeyEnter:
 				if m.activeView == activeViewWelcome || m.activeView == activeViewRaceFinished {
 					m.loading = true
@@ -97,6 +99,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 
 						md.raceId = reg.RaceId
+						md.racerId = reg.RacerId
 						md.raceWords = reg.RaceWords
 						md.wordCount = reg.WordCount
 						md.allRacerProgress = reg.AllRaceProgress
@@ -173,7 +176,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		rp := RaceProgress{
 			Fingerprint:        m.fingerprint,
-			RacerId:            m.racerId,
+			RacerId:            m.data.racerId,
 			PercentageComplete: p,
 		}
 		var raceCompletionPercentage []byte
