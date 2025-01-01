@@ -99,7 +99,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 
 						md.raceId = reg.RaceId
-						md.racerId = reg.RacerId
 						md.raceWords = reg.RaceWords
 						md.wordCount = reg.WordCount
 						md.allRacerProgress = reg.AllRaceProgress
@@ -176,7 +175,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		rp := RaceProgress{
 			Fingerprint:        m.fingerprint,
-			RacerId:            m.data.racerId,
+			RacerId:            m.racerId,
 			PercentageComplete: p,
 		}
 		var raceCompletionPercentage []byte
@@ -246,6 +245,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.racerProgressBars = make([]progress.Model, maxPlayersPerRace)
 				for i := int8(0); i < m.data.racerCount; i++ {
 					m.racerProgressBars[i] = progress.New(progress.WithSolidFill(playerColors[i]))
+					if m.fingerprint == m.data.allRacerProgress[i].Fingerprint {
+						m.racerId = i
+					}
 				}
 			}
 			return m, cmd
