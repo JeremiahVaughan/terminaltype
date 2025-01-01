@@ -272,6 +272,7 @@ type RaceRegistration struct {
 	RaceWords       string         `json:"raceWords"`
 	WordCount       int8           `json:"wordCount"`
 	RaceId          string         `json:"raceId"`
+    RacerId int8 `json:"racerId"`
 	AllRaceProgress []RaceProgress `json:"allRaceProgress"`
 	RacerCount      int8           `json:"racerCount"`
 }
