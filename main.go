@@ -339,6 +339,7 @@ type model struct {
 	raceTicker           *stopwatch.Model
 	raceStartCountDown   timer.Model
 	natsConnection       *nats.Conn
+	racerId              int8
 	allRacerProgressChan chan *nats.Msg
 	racerProgressBars    []progress.Model
 	raceCtx              context.Context // used for cleaning up all resources used in the race
@@ -359,7 +360,6 @@ type modelData struct {
 	raceWords        string
 	wordCount        int8
 	raceId           string // also the fingerprint print of user in the first race slot
-	racerId          int8
 	racerCount       int8
 	allRacerProgress []RaceProgress
 }
@@ -458,9 +458,8 @@ func handleRaceRegistration(ctx context.Context) error {
 		select {
 		case natsMsg := <-subChan:
 			f := string(natsMsg.Data)
-			rr.RacerId = rr.RacerCount
-			rr.AllRaceProgress[rr.RacerId].Fingerprint = f
-			rr.AllRaceProgress[rr.RacerId].RacerId = rr.RacerId
+			rr.AllRaceProgress[rr.RacerCount].Fingerprint = f
+			rr.AllRaceProgress[rr.RacerCount].RacerId = int8(rr.RacerCount)
 			if rr.RacerCount == 0 {
 				rr.RaceId = f
 			} else {
