@@ -1,6 +1,6 @@
 It's a typing game in your terminal.
 
-Get started with:
+To Play:
 `ssh terminaltype.com`
 
 ASCII art generated with:
