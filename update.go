@@ -187,7 +187,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.data.err = m.natsConnection.Publish(m.data.raceId, raceCompletionPercentage)
 		if m.data.err != nil {
-			m.data.err = fmt.Errorf("error, when attempting to publish the message for Update(). Error: %v", m.data.err)
+			m.data.err = fmt.Errorf(
+				"error, when attempting to publish the message for Update(). Message: %s. Error: %v",
+				m.data.raceId,
+				m.data.err,
+			)
 			HandleUnexpectedError(nil, m.data.err)
 			return m, cmd
 		}
