@@ -167,6 +167,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd = tea.Batch(cmd, rtCmd)
 		return m, cmd
 	case stopwatch.TickMsg:
+		if m.data.raceId == "" {
+			return m, cmd
+		}
 		var p float32
 		if m.correctPos == 0 {
 			p = 0
