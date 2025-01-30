@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -55,38 +56,51 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					// todo figure out the correct way to determine this channels buffer size
 					m.allRacerProgressChan = make(chan *nats.Msg, 30)
 					m.raceCtx, m.raceCancel = context.WithCancel(m.ctx)
-					m.raceStartCountDown = timer.NewWithInterval(time.Duration(raceStartTimeoutInSeconds)*time.Second, time.Second)
+					var sub *nats.Subscription
+					sub, m.data.err = m.natsConnection.SubscribeSync(m.fingerprint)
+					if m.data.err != nil {
+						m.data.err = fmt.Errorf("error, when subscribing to registration queue for Update(). Error: %v", m.data.err)
+						HandleUnexpectedError(nil, m.data.err)
+						return m, cmd
+					}
+					sendMsg := nats.Msg{
+						Subject: raceRegistrationRequestQueueId,
+						Data:    []byte(m.fingerprint),
+					}
+					m.data.err = m.natsConnection.PublishMsg(&sendMsg)
+					if m.data.err != nil {
+						m.data.err = fmt.Errorf("error, when publishing registation request message for Update(). Error: %v", m.data.err)
+						HandleUnexpectedError(nil, m.data.err)
+						return m, cmd
+					}
+					// waits for twice as long as the race timeout and then assumes failure
+					raceStartTimeout := time.Duration(raceStartTimeoutInSeconds) * 2 * time.Second
+					var subMsg *nats.Msg
+					subMsg, m.data.err = sub.NextMsg(raceStartTimeout)
+					if m.data.err != nil {
+						m.data.err = fmt.Errorf("error, when recieving race registration start time for Update(). Error: %v", m.data.err)
+						HandleUnexpectedError(nil, m.data.err)
+						return m, cmd
+					}
+					var theResponse RegResponse
+					m.data.err = json.Unmarshal(subMsg.Data, &theResponse)
+					if m.data.err != nil {
+						m.data.err = fmt.Errorf("error, when decoding RegResponse for Update(). Error: %v", m.data.err)
+						HandleUnexpectedError(nil, m.data.err)
+						return m, cmd
+					}
+					timeRemainingTillStart := theResponse.RaceStartTime - time.Now().Unix()
+					m.raceStartCountDown = timer.NewWithInterval(time.Duration(timeRemainingTillStart)*time.Second, time.Second)
 					startTimeCmd := m.raceStartCountDown.Init()
 					cmd = tea.Batch(cmd, startTimeCmd)
+					m.data.raceId = theResponse.RaceId
 					go func() {
-						var sub *nats.Subscription
-						sub, md.err = m.natsConnection.SubscribeSync(m.fingerprint)
 						defer sub.Unsubscribe()
-						if md.err != nil {
-							md.err = fmt.Errorf("error, when subscribing to registration queue for Update(). Error: %v", md.err)
-							HandleUnexpectedError(nil, md.err)
-							loadingFinished <- md
-							return
-						}
-						// waits for twice as long as the race timeout and then assumes failure
-						sendMsg := nats.Msg{
-							Subject: raceRegistrationRequestQueueId,
-							Data:    []byte(m.fingerprint),
-						}
-						md.err = m.natsConnection.PublishMsg(&sendMsg)
-						if md.err != nil {
-							md.err = fmt.Errorf("error, when publishing registation request message for Update(). Error: %v", md.err)
-							HandleUnexpectedError(nil, md.err)
-							loadingFinished <- md
-							return
-						}
-						raceStartTimeout := time.Duration(raceStartTimeoutInSeconds) * 120 * time.Second
-						var subMsg *nats.Msg
 						subMsg, md.err = sub.NextMsg(raceStartTimeout)
 						if md.err != nil {
 							md.err = fmt.Errorf("error, when retrieving registration response message for Update(). Error: %v", md.err)
 							HandleUnexpectedError(nil, md.err)
-							loadingFinished <- md
+							m.loadingFinished <- md
 							return
 						}
 						var reg RaceRegistration
@@ -94,7 +108,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if md.err != nil {
 							md.err = fmt.Errorf("error, when decoding registration response message for Update(). Error: %v", md.err)
 							HandleUnexpectedError(nil, md.err)
-							loadingFinished <- md
+							m.loadingFinished <- md
 							return
 						}
 
@@ -108,9 +122,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							m.natsConnection,
 							md.raceId,
 							m.allRacerProgressChan,
+							m.raceCancel,
 						)
 
-						loadingFinished <- md
+						m.loadingFinished <- md
 					}()
 					cmd = tea.Batch(cmd, m.spinner.Tick)
 					return m, cmd
@@ -167,9 +182,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd = tea.Batch(cmd, rtCmd)
 		return m, cmd
 	case stopwatch.TickMsg:
-		if m.data.raceId == "" {
-			return m, cmd
-		}
 		var p float32
 		if m.correctPos == 0 {
 			p = 0
@@ -190,11 +202,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.data.err = m.natsConnection.Publish(m.data.raceId, raceCompletionPercentage)
 		if m.data.err != nil {
-			m.data.err = fmt.Errorf(
-				"error, when attempting to publish the message for Update(). Message: %s. Error: %v",
-				m.data.raceId,
-				m.data.err,
-			)
+			m.data.err = fmt.Errorf("error, when attempting to publish the message for Update(). Error: %v", m.data.err)
 			HandleUnexpectedError(nil, m.data.err)
 			return m, cmd
 		}
@@ -229,10 +237,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case spinner.TickMsg:
 		select {
-		case md := <-loadingFinished:
+		case md := <-m.loadingFinished:
 			m.resetSpinner()
 			m.loading = false
 			m.data = md
+			if m.data.err != nil {
+				return m, cmd
+			}
 			switch m.activeView {
 			case activeViewWelcome, activeViewRaceFinished:
 				m.activeView = activeViewRace

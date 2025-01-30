@@ -189,22 +189,7 @@ func evaluateTypedKeyMatch(m model, cmd tea.Cmd, keyMsg string) (model, tea.Cmd)
 		m.correctPos++
 		m.incorrectPos = m.correctPos // stay in sync
 		if m.correctPos >= len(m.raceWordsCharSlice) {
-			m.wordsPerMin = calculateWordsPerMin(
-				m.raceStartTime,
-				time.Now().UnixMilli(),
-				m.data.wordCount,
-			)
-			m.activeView = activeViewRaceFinished
-			cmd1 := m.raceTicker.Stop()
-			cmd2 := m.raceTicker.Reset()
-			cmd = tea.Batch(cmd, cmd1, cmd2)
-			go func() {
-				err := incrementRaceCompletionCount(m.fingerprint)
-				if err != nil {
-					HandleUnexpectedError(nil, fmt.Errorf("error, when incrementRaceCompletionCount() for evaluateTypedKeyMatch(). Error: %v", err))
-					// can continue if this error happens because its not the end of the world, but still needs to be reported
-				}
-			}()
+			return endRace(m, cmd)
 		}
 	} else {
 		i := m.incorrectPos
@@ -268,13 +253,19 @@ WHERE ssh_finger_print = ?`,
 	return result, nil
 }
 
+type RegResponse struct {
+	RaceId        string `json:"raceId"`
+	RaceStartTime int64  `json:"raceStartTime"`
+}
+
 type RaceRegistration struct {
 	RaceWords       string         `json:"raceWords"`
 	WordCount       int8           `json:"wordCount"`
 	RaceId          string         `json:"raceId"`
-    RacerId int8 `json:"racerId"`
+	RacerId         int8           `json:"racerId"`
 	AllRaceProgress []RaceProgress `json:"allRaceProgress"`
 	RacerCount      int8           `json:"racerCount"`
+	RaceStartTime   int64          `json:"raceStartTime"`
 }
 
 type RaceProgress struct {
@@ -374,6 +365,7 @@ func monitorRaceProgression(
 	raceNatsConnection *nats.Conn,
 	raceId string,
 	allRacerProgressChan chan *nats.Msg,
+	raceCancel context.CancelFunc,
 ) {
 	sub, err := raceNatsConnection.ChanSubscribe(raceId, allRacerProgressChan)
 	if err != nil {
@@ -381,7 +373,12 @@ func monitorRaceProgression(
 		HandleUnexpectedError(nil, err)
 		return
 	}
-	<-raceCtx.Done()
+
+	select {
+	case <-time.After(time.Duration(raceTimeoutInSeconds) * time.Second):
+		raceCancel()
+	case <-raceCtx.Done():
+	}
 	err = sub.Unsubscribe()
 	if err != nil {
 		err = fmt.Errorf("error, when unsubscribing for monitorRaceProgression(). Error: %v", err)
@@ -408,4 +405,25 @@ func processRacerProgressMsgs(messages chan *nats.Msg, progress []RaceProgress) 
 			return progress, nil
 		}
 	}
+}
+
+func endRace(m model, cmd tea.Cmd) (model, tea.Cmd) {
+	m.wordsPerMin = calculateWordsPerMin(
+		m.raceStartTime,
+		time.Now().UnixMilli(),
+		m.data.wordCount,
+	)
+	m.activeView = activeViewRaceFinished
+	cmd1 := m.raceTicker.Stop()
+	cmd2 := m.raceTicker.Reset()
+	cmd = tea.Batch(cmd, cmd1, cmd2)
+	go func() {
+		err := incrementRaceCompletionCount(m.fingerprint)
+		if err != nil {
+			HandleUnexpectedError(nil, fmt.Errorf("error, when incrementRaceCompletionCount() for evaluateTypedKeyMatch(). Error: %v", err))
+			// can continue if this error happens because its not the end of the world, but still needs to be reported
+		}
+	}()
+	m.raceCancel()
+	return m, cmd
 }

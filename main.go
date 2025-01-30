@@ -5,6 +5,7 @@ import (
 	"crypto/md5"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -45,7 +46,6 @@ import (
 var ns *server.Server
 var database *sql.DB
 var chatClient *openai.Client
-var loadingFinished = make(chan modelData, 1)
 var sentencesPerTypingTest = 3
 var typingTestDesiredWidth = 60
 var textBaseStyle lipgloss.Style
@@ -55,6 +55,7 @@ var regularStyle lipgloss.Style
 var cursorStyle lipgloss.Style
 
 var raceStartTimeoutInSeconds = 10
+var raceTimeoutInSeconds = 180
 var maxPlayersPerRace = int8(5)
 var playerColors = []string{
 	"#00ff00",
@@ -353,6 +354,7 @@ type model struct {
 	incorrectPos         int
 	raceStartTime        int64
 	wordsPerMin          int
+	loadingFinished      chan modelData
 }
 
 type modelData struct {
@@ -370,10 +372,11 @@ func NewModel(
 ) tea.Model {
 	ctx := context.Background()
 	m := model{
-		ctx:         ctx,
-		renderer:    renderer,
-		fingerprint: fingerprint,
-		activeView:  activeViewWelcome,
+		ctx:             ctx,
+		renderer:        renderer,
+		fingerprint:     fingerprint,
+		activeView:      activeViewWelcome,
+		loadingFinished: make(chan modelData, 1),
 	}
 	m.resetSpinner()
 	return m
@@ -454,18 +457,39 @@ func handleRaceRegistration(ctx context.Context) error {
 	rr := RaceRegistration{
 		AllRaceProgress: make([]RaceProgress, maxPlayersPerRace),
 	}
+	ticker := time.Tick(time.Second)
 	for {
 		select {
 		case natsMsg := <-subChan:
 			f := string(natsMsg.Data)
-			rr.AllRaceProgress[rr.RacerCount].Fingerprint = f
-			rr.AllRaceProgress[rr.RacerCount].RacerId = int8(rr.RacerCount)
-			if rr.RacerCount == 0 {
-				rr.RaceId = f
-			} else {
-				rr.RaceId = rr.AllRaceProgress[0].Fingerprint
+			var racerAlreadyRegistered bool
+			for _, theRacer := range rr.AllRaceProgress {
+				if theRacer.Fingerprint == f {
+					racerAlreadyRegistered = true
+				}
 			}
-			rr.RacerCount++
+			if !racerAlreadyRegistered {
+				rr.AllRaceProgress[rr.RacerCount].Fingerprint = f
+				rr.AllRaceProgress[rr.RacerCount].RacerId = int8(rr.RacerCount)
+				if rr.RacerCount == 0 {
+					rr.RaceId = f
+					rr.RaceStartTime = int64(raceStartTimeoutInSeconds) + time.Now().Unix()
+				}
+				rr.RacerCount++
+			}
+			regResponse := RegResponse{
+				RaceId:        rr.RaceId,
+				RaceStartTime: rr.RaceStartTime,
+			}
+			var resp []byte
+			resp, err = json.Marshal(regResponse)
+			if err != nil {
+				return fmt.Errorf("error, when marshaling regResponse for handleRaceRegistration(). Error: %v", err)
+			}
+			err = conn.Publish(f, resp)
+			if err != nil {
+				return fmt.Errorf("error, when sending raceRegistrationStartTime to racer for handleRaceRegistration(). Error: %v", err)
+			}
 			if rr.RacerCount == maxPlayersPerRace {
 				err = publishRace(conn, rr)
 				if err != nil {
@@ -475,8 +499,8 @@ func handleRaceRegistration(ctx context.Context) error {
 					AllRaceProgress: make([]RaceProgress, maxPlayersPerRace),
 				}
 			}
-		case <-time.After(time.Duration(raceStartTimeoutInSeconds) * time.Second):
-			if rr.RacerCount != 0 {
+		case <-ticker:
+			if rr.RacerCount != 0 && time.Now().Unix() >= rr.RaceStartTime {
 				err = publishRace(conn, rr)
 				if err != nil {
 					return fmt.Errorf("error, when publishRace() for handleRaceRegistration() after race timeout exceeded. Error: %v", err)
