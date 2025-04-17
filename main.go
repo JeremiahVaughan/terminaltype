@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+    "flag"
 	"crypto/md5"
 	"encoding/base64"
 	"encoding/hex"
@@ -22,8 +23,6 @@ import (
 	"github.com/charmbracelet/bubbles/timer"
 	"github.com/muesli/termenv"
 
-	"database/sql"
-	"embed"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -41,19 +40,21 @@ import (
 
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
+
+    "github.com/JeremiahVaughan/terminaltype/config"
+    "github.com/JeremiahVaughan/terminaltype/clients"
 )
 
 var ns *server.Server
-var database *sql.DB
 var chatClient *openai.Client
-var sentencesPerTypingTest = 3
-var typingTestDesiredWidth = 60
 var textBaseStyle lipgloss.Style
 var correctStyle lipgloss.Style
 var incorrectStyle lipgloss.Style
 var regularStyle lipgloss.Style
 var cursorStyle lipgloss.Style
 
+var sentencesPerTypingTest = 3
+var typingTestDesiredWidth = 60
 var raceStartTimeoutInSeconds = 10
 var raceTimeoutInSeconds = 180
 var maxPlayersPerRace = int8(5)
@@ -65,247 +66,159 @@ var playerColors = []string{
 	"#ff00ff",
 }
 
-const raceRegistrationRequestQueueId = "req_race_reg"
+var theClients *clients.Clients
 
-//go:embed schema/*
-var databaseFiles embed.FS
+const raceRegistrationRequestQueueId = "req_race_reg"
 
 func main() {
 
 	// forces the color profile since its not getting applied sometimes
 	lipgloss.SetColorProfile(termenv.TrueColor)
 
-	if os.Getenv("TF_VAR_test_mode") == "false" {
-		environment := os.Getenv("TF_VAR_environment")
-		if environment == "" {
-			log.Fatal("error, must provide the TF_VAR_environment env var")
-		}
+    var configPath string
+    flag.StringVar(
+        &configPath,
+        "c",
+        "config/config.json",
+        "location of config file",
+    ) 
 
-		sentryEndpoint := os.Getenv("TF_VAR_sentry_end_point")
-		if sentryEndpoint == "" {
-			log.Fatal("error, must provide the TF_VAR_sentry_end_point env var")
-		}
+    flag.Parse()
 
-		err := sentry.Init(sentry.ClientOptions{
-			Dsn: sentryEndpoint,
-			// Set TracesSampleRate to 1.0 to capture 100%
-			// of transactions for performance monitoring.
-			// We recommend adjusting this value in production,
-			TracesSampleRate: 1.0,
+    config, err := config.New(configPath)
+    if err != nil {
+        log.Fatalf("error, when creating new config for main(). Error: %v", err)
+    }
 
-			Environment: environment,
-		})
-		if err != nil {
-			log.Fatalf("error, sentry.Init(). Error: %v", err)
-		}
-		defer sentry.Flush(2 * time.Second)
+    theClients, err = clients.New(config)
+    if err != nil {
+        log.Fatalf("error, when creating clients for main(). Error: %v", err)
+    }
 
-		ctx, cancel := context.WithCancel(context.Background())
-		signalChan := make(chan os.Signal, 1)
-		signal.Notify(
-			signalChan,
-			os.Interrupt,
-			syscall.SIGINT,
-			syscall.SIGTERM,
-		)
+    ctx, cancel := context.WithCancel(context.Background())
+    signalChan := make(chan os.Signal, 1)
+    signal.Notify(
+        signalChan,
+        os.Interrupt,
+        syscall.SIGINT,
+        syscall.SIGTERM,
+    )
 
-		go func() {
-			<-signalChan
-			cancel()
-		}()
+    go func() {
+        <-signalChan
+        cancel()
+    }()
 
-		key := os.Getenv("TF_VAR_openai_api_key")
-		if key == "" {
-			HandleUnexpectedError(nil, errors.New("error, must provide the TF_VAR_openai_api_key env var"))
-			return
-		}
-		chatClient = openai.NewClient(key)
+    chatClient = openai.NewClient(config.OpenAIAPIKey)
 
-		sshPort := os.Getenv("TF_VAR_ssh_port")
-		if sshPort == "" {
-			sshPort = "2222"
-		}
-		httpPort := os.Getenv("TF_VAR_http_port")
-		if httpPort == "" {
-			httpPort = "8080"
-		}
-		numberOfSentencesPerTypingTestString := os.Getenv("TF_VAR_number_of_sentences_per_typing_test")
-		if numberOfSentencesPerTypingTestString != "" {
-			sentencesPerTypingTest, err = strconv.Atoi(numberOfSentencesPerTypingTestString)
-			if err != nil {
-				HandleUnexpectedError(nil, fmt.Errorf("error, unable to parse value provided for TF_VAR_number_of_sentences_per_typing_test. Provided: %v", numberOfSentencesPerTypingTestString))
-				return
-			}
-			if sentencesPerTypingTest < 1 {
-				HandleUnexpectedError(nil, fmt.Errorf("error, invalid value provided for TF_VAR_number_of_sentences_per_typing_test. Provided: %d", sentencesPerTypingTest))
-				return
-			}
-		}
-		typingTestDesiredWidthString := os.Getenv("TF_VAR_typing_test_desired_width")
-		if typingTestDesiredWidthString != "" {
-			typingTestDesiredWidth, err = strconv.Atoi(typingTestDesiredWidthString)
-			if err != nil {
-				HandleUnexpectedError(nil, fmt.Errorf("error, unable to parse value provided for TF_VAR_typing_test_desired_width. Provided: %v", typingTestDesiredWidthString))
-				return
-			}
-			if typingTestDesiredWidth < 5 {
-				HandleUnexpectedError(nil, fmt.Errorf("error, invalid value provided for TF_VAR_typing_test_desired_width. Provided: %d", typingTestDesiredWidth))
-				return
-			}
-		}
+    sentencesPerTypingTest = config.NumberOfSentencesPerTypingTest
+    typingTestDesiredWidth = config.TypingTestDesiredWidth
+    raceStartTimeoutInSeconds = config.RaceStartTimeoutInSeconds
+    maxPlayersPerRace = config.MaxPlayersPerRace
+    log.Printf("make players per race: %d", maxPlayersPerRace)
 
-		raceStartTimeoutInSecondsString := os.Getenv("TF_VAR_race_start_timeout_in_seconds")
-		if raceStartTimeoutInSecondsString != "" {
-			raceStartTimeoutInSeconds, err = strconv.Atoi(raceStartTimeoutInSecondsString)
-			if err != nil {
-				HandleUnexpectedError(nil, fmt.Errorf("error, unable to parse value provided for TF_VAR_race_start_timeout_in_seconds. Provided: %v", raceStartTimeoutInSecondsString))
-				return
-			}
-			if raceStartTimeoutInSeconds < 3 {
-				HandleUnexpectedError(nil, fmt.Errorf("error, invalid value provided for TF_VAR_race_start_timeout_in_seconds. Provided: %d", raceStartTimeoutInSeconds))
-				return
-			}
-		}
+    decodedKey, err := base64.StdEncoding.DecodeString(config.HostKey)
+    if err != nil {
+        HandleUnexpectedError(nil, fmt.Errorf("error, unable to parse HostKey. Error: %v", err))
+        return
+    }
 
-		maxPlayersPerRaceString := os.Getenv("TF_VAR_max_players_per_race")
-		if maxPlayersPerRaceString != "" {
-			var mp int64
-			mp, err = strconv.ParseInt(maxPlayersPerRaceString, 10, 8)
-			if err != nil {
-				HandleUnexpectedError(nil, fmt.Errorf("error, unable to parse value provided for TF_VAR_max_players_per_race. Provided: %v", maxPlayersPerRaceString))
-				return
-			}
-			maxPlayersPerRace = int8(mp)
-			if maxPlayersPerRace < 1 {
-				HandleUnexpectedError(nil, fmt.Errorf("error, invalid value provided for TF_VAR_max_players_per_race. Provided: %d", maxPlayersPerRace))
-				return
-			}
-		}
+    err = initNats()
+    if err != nil {
+        HandleUnexpectedError(nil, fmt.Errorf("error, when initNats() for main(). Error: %v", err))
+        return
+    }
 
-		hostKey := os.Getenv("TF_VAR_host_key")
-		if hostKey == "" {
-			HandleUnexpectedError(nil, errors.New("error, you must provide the TF_VAR_host_key env var"))
-			return
-		}
-		decodedKey, err := base64.StdEncoding.DecodeString(hostKey)
-		if err != nil {
-			HandleUnexpectedError(nil, fmt.Errorf("error, unable to parse TF_VAR_host_key env var. Error: %v", err))
-			return
-		}
+    err = os.MkdirAll(config.Database.DataDirectory, os.ModePerm)
+    if err != nil {
+        HandleUnexpectedError(nil, fmt.Errorf("error, could not create data directory. Error: %v", err))
+        return
+    }
+    dbFile := fmt.Sprintf("%s/%s", config.Database.DataDirectory, "data")
+    _, err = os.Stat(dbFile)
+    if os.IsNotExist(err) {
+        var file *os.File
+        file, err = os.Create(dbFile)
+        if err != nil {
+            HandleUnexpectedError(nil, fmt.Errorf("error, when creating db file. Error: %v", err))
+            return
+        }
+        file.Close()
+    } else if err != nil {
+        // An error other than the file not existing occurred
+        HandleUnexpectedError(nil, fmt.Errorf("error, when checking db file exists. Error: %v", err))
+        return
+    }
 
-		err = initNats()
-		if err != nil {
-			HandleUnexpectedError(nil, fmt.Errorf("error, when initNats() for main(). Error: %v", err))
-			return
-		}
+    s, err := wish.NewServer(
+        wish.WithAddress(net.JoinHostPort("0.0.0.0", strconv.Itoa(config.SSHPort))),
+        wish.WithHostKeyPEM(decodedKey),
+        wish.WithMiddleware(
+            bubbletea.Middleware(teaHandler),
+            activeterm.Middleware(), // Bubble Tea apps usually require a PTY.
+            logging.Middleware(),
+        ),
+        wish.WithPublicKeyAuth(func(_ ssh.Context, key ssh.PublicKey) bool {
+            return true
+        }),
+        wish.WithKeyboardInteractiveAuth(
+            func(ctx ssh.Context, challenger gossh.KeyboardInteractiveChallenge) bool {
+                return true
+            },
+        ),
+    )
+    if err != nil {
+        HandleUnexpectedError(nil, fmt.Errorf("error, starting ssh server. Error: %v", err))
+        return
+    }
 
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			HandleUnexpectedError(nil, fmt.Errorf("error, could not find the home directory. Error: %v", err))
-			return
-		}
-		dataDirectory := fmt.Sprintf("%s/terminaltype_data/", homeDir)
-		err = os.MkdirAll(dataDirectory, os.ModePerm)
-		if err != nil {
-			HandleUnexpectedError(nil, fmt.Errorf("error, could not create data directory. Error: %v", err))
-			return
-		}
-		dbFile := fmt.Sprintf("%s%s", dataDirectory, "data")
-		_, err = os.Stat(dbFile)
-		if os.IsNotExist(err) {
-			var file *os.File
-			file, err = os.Create(dbFile)
-			if err != nil {
-				HandleUnexpectedError(nil, fmt.Errorf("error, when creating db file. Error: %v", err))
-				return
-			}
-			file.Close()
-		} else if err != nil {
-			// An error other than the file not existing occurred
-			HandleUnexpectedError(nil, fmt.Errorf("error, when checking db file exists. Error: %v", err))
-			return
-		}
-		database, err = sql.Open("sqlite3", dbFile)
-		if err != nil {
-			HandleUnexpectedError(nil, fmt.Errorf("error, when establishing connection with sqlite db. Error: %v", err))
-			return
-		}
-		err = processSchemaChanges(databaseFiles)
-		if err != nil {
-			HandleUnexpectedError(nil, fmt.Errorf("error, when processing schema changes. Error: %v", err))
-			return
-		}
+    textBaseStyle = lipgloss.NewStyle().Width(typingTestDesiredWidth)
+    correctStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#58bc54"))
+    incorrectStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#ce4041"))
+    regularStyle = lipgloss.NewStyle()
+    cursorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color("#ffffff"))
 
-		s, err := wish.NewServer(
-			wish.WithAddress(net.JoinHostPort("0.0.0.0", sshPort)),
-			wish.WithHostKeyPEM(decodedKey),
-			wish.WithMiddleware(
-				bubbletea.Middleware(teaHandler),
-				activeterm.Middleware(), // Bubble Tea apps usually require a PTY.
-				logging.Middleware(),
-			),
-			wish.WithPublicKeyAuth(func(_ ssh.Context, key ssh.PublicKey) bool {
-				return true
-			}),
-			wish.WithKeyboardInteractiveAuth(
-				func(ctx ssh.Context, challenger gossh.KeyboardInteractiveChallenge) bool {
-					return true
-				},
-			),
-		)
-		if err != nil {
-			HandleUnexpectedError(nil, fmt.Errorf("error, starting ssh server. Error: %v", err))
-			return
-		}
+    go func() {
+        err1 := handleRaceRegistration(ctx)
+        if err1 != nil {
+            HandleUnexpectedError(nil, fmt.Errorf("error, when handleRaceRegistration() for main(). Error: %v", err1))
+            return
+        }
+    }()
 
-		textBaseStyle = lipgloss.NewStyle().Width(typingTestDesiredWidth)
-		correctStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#58bc54"))
-		incorrectStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#ce4041"))
-		regularStyle = lipgloss.NewStyle()
-		cursorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#000000")).Background(lipgloss.Color("#ffffff"))
+    go func() {
+        err2 := ensureEnoughGeneratedText(ctx)
+        if err2 != nil {
+            HandleUnexpectedError(nil, fmt.Errorf("error, when ensureEnoughGeneratedText() for main(). Error: %v", err2))
+            return
+        }
+    }()
 
-		go func() {
-			err1 := handleRaceRegistration(ctx)
-			if err1 != nil {
-				HandleUnexpectedError(nil, fmt.Errorf("error, when handleRaceRegistration() for main(). Error: %v", err1))
-				return
-			}
-		}()
+    go func() {
+        log.Printf("listening for ssh requests")
+        if err3 := s.ListenAndServe(); err3 != nil && !errors.Is(err3, ssh.ErrServerClosed) {
+            HandleUnexpectedError(nil, fmt.Errorf("error, starting http server. Error: %v", err3))
+            return
+        }
+    }()
 
-		go func() {
-			err2 := ensureEnoughGeneratedText(ctx)
-			if err2 != nil {
-				HandleUnexpectedError(nil, fmt.Errorf("error, when ensureEnoughGeneratedText() for main(). Error: %v", err2))
-				return
-			}
-		}()
+    http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+        http.Redirect(w, r, "https://www.terminaltype.com", http.StatusFound)
+    })
 
-		go func() {
-			log.Printf("listening for ssh requests")
-			if err3 := s.ListenAndServe(); err3 != nil && !errors.Is(err3, ssh.ErrServerClosed) {
-				HandleUnexpectedError(nil, fmt.Errorf("error, starting http server. Error: %v", err3))
-				return
-			}
-		}()
+    go func() {
+        defer cancel()
+        log.Printf("listening for http requests")
+        err4 := http.ListenAndServe(fmt.Sprintf(":%d", config.HTTPPort), nil)
+        if err4 != nil {
+            HandleUnexpectedError(nil, fmt.Errorf("error, when serving http. Error: %v", err4))
+            return
+        }
+    }()
 
-		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			http.Redirect(w, r, "https://www.terminaltype.com", http.StatusFound)
-		})
-
-		go func() {
-			defer cancel()
-			log.Printf("listening for http requests")
-			err4 := http.ListenAndServe(":"+httpPort, nil)
-			if err4 != nil {
-				HandleUnexpectedError(nil, fmt.Errorf("error, when serving http. Error: %v", err4))
-				return
-			}
-		}()
-
-		<-ctx.Done()
-		s.Shutdown(ctx)
-		log.Println("server shutdown properly")
-	}
+    <-ctx.Done()
+    s.Shutdown(ctx)
+    log.Println("server shutdown properly")
 }
 
 type sshOutput struct {

@@ -55,7 +55,7 @@ func fetchRaceWords() (string, int8, error) {
 	WHERE id IN (%s)`,
 		strings.Join(placeholders, ","),
 	)
-	rows, err := database.Query(
+	rows, err := theClients.Database.Conn.Query(
 		theQuery,
 		randomSentences...,
 	)
@@ -209,7 +209,7 @@ func incrementRaceCompletionCount(userFingerprint string) error {
 	}
 	count++
 	if count == 1 {
-		_, err = database.Exec(
+		_, err = theClients.Database.Conn.Exec(
 			`INSERT INTO person_who_types (ssh_finger_print, typing_test_completion_count)
 VALUES (?, ?)`,
 			userFingerprint,
@@ -219,7 +219,7 @@ VALUES (?, ?)`,
 			return fmt.Errorf("error, during insert for incrementRaceCompletionCount(). Error: %v", err)
 		}
 	} else {
-		_, err = database.Exec(
+		_, err = theClients.Database.Conn.Exec(
 			`UPDATE person_who_types 
 SET typing_test_completion_count = ?
 WHERE ssh_finger_print = ?`,
@@ -235,7 +235,7 @@ WHERE ssh_finger_print = ?`,
 
 func fetchCurrentRaceCompletionCount(userFingerprint string) (int, error) {
 	var result int
-	err := database.QueryRow(
+	err := theClients.Database.Conn.QueryRow(
 		`SELECT typing_test_completion_count
 FROM person_who_types
 WHERE ssh_finger_print = ?`,

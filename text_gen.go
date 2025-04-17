@@ -81,7 +81,7 @@ func gatherRandomText(ctx context.Context) (string, error) {
 func persistGeneratedSentences(text string) error {
 	sentences := strings.Split(text, ".")
 	sqlStatement, args := generateSqlForSentences(sentences)
-	_, err := database.Exec(sqlStatement, args...)
+	_, err := theClients.Database.Conn.Exec(sqlStatement, args...)
 	if err != nil {
 		return fmt.Errorf("error, when executing sql statement for persistGeneratedSentences(). Error: %v", err)
 	}
@@ -128,7 +128,7 @@ func isEnoughTextGenerated(
 
 func fetchHighestTypingTestCompletionCount() (int, error) {
 	var result int
-	err := database.QueryRow(
+	err := theClients.Database.Conn.QueryRow(
 		`SELECT typing_test_completion_count
 FROM person_who_types
 ORDER BY typing_test_completion_count DESC
@@ -148,7 +148,7 @@ LIMIT 1`,
 
 func fetchNumberOfGeneratedSentences() (int, error) {
 	var result int
-	err := database.QueryRow(
+	err := theClients.Database.Conn.QueryRow(
 		`SELECT id
 FROM sentence
 ORDER BY id DESC

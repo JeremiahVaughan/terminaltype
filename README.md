@@ -10,3 +10,14 @@ For running this game yourself and want to use port 22 make sure you remap your 
     `sudo vim /etc/systemd/system/ssh.service.requires/ssh.socket`
     `sudo systemctl daemon-reload`
     `sudo systemctl restart ssh.socket`
+
+
+Deploy:
+```./deploy.sh```
+
+Ensure local ~/.ssh/config file contains an entry for "deploy.target"
+
+See logs:
+```journalctl -u terminaltype.service```
+
+

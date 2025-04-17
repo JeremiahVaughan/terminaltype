@@ -1,0 +1,13 @@
+[Unit]
+Description=Typing Game
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/home/piegarden/terminaltype/app -c /home/piegarden/terminaltype/config.json -d /home/piegarden/terminaltype-data -m /home/piegarden/terminaltype/migrate
+
+Restart=on-failure
+User=root
+
+[Install]
+WantedBy=multi-user.target

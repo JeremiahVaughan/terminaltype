@@ -3,3 +3,5 @@
 ./bin
 debug
 __debug_bin*                                                          
+config.json
+
