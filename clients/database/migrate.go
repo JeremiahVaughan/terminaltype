@@ -26,7 +26,7 @@ func (c *Client) migrate() error {
 		log.Println("database initialization complete")
 	}
 
-	log.Println("checking for migrations")
+	log.Printf("checking for migrations at %s", c.migrationDir)
 	dirEntries, err := os.ReadDir(c.migrationDir)
 	if err != nil {
         return fmt.Errorf("error, when attempting to read database directory. Directory: %s. Error: %v", c.migrationDir, err)
