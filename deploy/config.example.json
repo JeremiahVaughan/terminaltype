@@ -1,0 +1,15 @@
+{
+  "testMode": false,
+  "openaiApiKey": "something",
+  "sshPort": 22,
+  "httpPort": 8080,
+  "numberOfSentencesPerTypingTest": 4,
+  "typingTestDesiredWidth": 65,
+  "raceStartTimeoutInSeconds": 10,
+  "maxPlayersPerRace": 5,
+  "hostKey": "something",
+  "database": {
+      "dataDirectory": "something",
+      "migrationDirectory": "something"
+  }
+}
