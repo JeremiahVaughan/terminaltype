@@ -24,8 +24,8 @@ func testHealthStatus() {
         Service: serviceName,
         StatusKey: TestKey,
         Unhealthy: false,
-        UnhealthyDelayInSeconds: 0,
-        Message: "everythang looks ok",
+        UnhealthyDelayInSeconds: 20,
+        Message: "its healthy",
     }
     theClients.Healthy.PublishHealthStatus(newStatus) 
 }

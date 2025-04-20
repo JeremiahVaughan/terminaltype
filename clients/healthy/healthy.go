@@ -114,10 +114,8 @@ func (c *Client) PublishHealthStatus(status HealthStatus) {
         c.ReportUnexpectedError(nil, err)
         return
     }
-    log.Println("todo remove publishing health status")
     err = c.Conn.Publish("update-health-status", bytes)    
     if err != nil {
-        log.Printf("todo remove error when publishing: %v", err)
         err = fmt.Errorf("error, when updating health status for key: %s. Error: %v", status.StatusKey, err)
         c.ReportUnexpectedError(nil, err)
         return
