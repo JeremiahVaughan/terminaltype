@@ -18,7 +18,15 @@ type Config struct {
     MaxPlayersPerRace int8 `json:"maxPlayersPerRace"`
     HostKey string `json:"hostKey"`
     Database Database `json:"database"`
+    Nats Nats `json:"nats"`
 }                                                              
+
+// config struct for nats
+type Nats struct {
+    Host string `json:"host"`
+    Port int `json:"port"`
+}
+
 
 type Database struct {
     DataDirectory string `json:"dataDirectory"`
@@ -52,5 +60,7 @@ func (c *Config) isValid() bool {
         c.RaceStartTimeoutInSeconds != 0 && 
         c.MaxPlayersPerRace != 0 &&
         c.Database.DataDirectory != "" &&
-        c.Database.MigrationDirectory != ""
+        c.Database.MigrationDirectory != "" &&
+        c.Nats.Host != "" &&
+        c.Nats.Port != 0
 }

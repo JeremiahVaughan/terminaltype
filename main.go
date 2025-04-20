@@ -31,7 +31,6 @@ import (
 	"github.com/charmbracelet/wish/activeterm"
 	"github.com/charmbracelet/wish/bubbletea"
 	"github.com/charmbracelet/wish/logging"
-	"github.com/getsentry/sentry-go"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/google/uuid"
@@ -52,6 +51,7 @@ var correctStyle lipgloss.Style
 var incorrectStyle lipgloss.Style
 var regularStyle lipgloss.Style
 var cursorStyle lipgloss.Style
+var serviceName = "terminaltype"
 
 var sentencesPerTypingTest = 3
 var typingTestDesiredWidth = 60
@@ -90,10 +90,14 @@ func main() {
         log.Fatalf("error, when creating new config for main(). Error: %v", err)
     }
 
-    theClients, err = clients.New(config)
+    theClients, err = clients.New(config, serviceName, healthyRefresh)
     if err != nil {
         log.Fatalf("error, when creating clients for main(). Error: %v", err)
     }
+
+    defer theClients.Healthy.Close()
+
+    testHealthStatus()
 
     ctx, cancel := context.WithCancel(context.Background())
     signalChan := make(chan os.Signal, 1)
@@ -348,11 +352,7 @@ func (m *model) resetSpinner() {
 }
 
 func HandleUnexpectedError(w http.ResponseWriter, err error) {
-	sentry.CaptureException(err)
-	log.Printf("ERROR: %v", err)
-	if w != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-	}
+    theClients.Healthy.ReportUnexpectedError(w, err)
 }
 
 func handleRaceRegistration(ctx context.Context) error {
