@@ -42,6 +42,10 @@ import (
 
     "github.com/JeremiahVaughan/terminaltype/config"
     "github.com/JeremiahVaughan/terminaltype/clients"
+    "github.com/JeremiahVaughan/terminaltype/models"
+    "github.com/JeremiahVaughan/terminaltype/views"
+    "github.com/JeremiahVaughan/terminaltype/router"
+    "github.com/JeremiahVaughan/terminaltype/controllers"
 )
 
 var ns *server.Server
@@ -98,6 +102,16 @@ func main() {
     defer theClients.Healthy.Close()
 
     testHealthStatus()
+
+    models := models.New(theClients)
+    views, err := views.New(config)
+    if err != nil {
+        err = fmt.Errorf("error, when creating views. Error: %v", err)
+        HandleUnexpectedError(nil, err)
+        return
+    }
+    controllers := controllers.New(views, models)
+    router := router.New(controllers, config)
 
     ctx, cancel := context.WithCancel(context.Background())
     signalChan := make(chan os.Signal, 1)
@@ -213,7 +227,7 @@ func main() {
     go func() {
         defer cancel()
         log.Printf("listening for http requests")
-        err4 := http.ListenAndServe(fmt.Sprintf(":%d", config.HTTPPort), nil)
+        err4 := router.Run(ctx, config.HTTPPort)
         if err4 != nil {
             HandleUnexpectedError(nil, fmt.Errorf("error, when serving http. Error: %v", err4))
             return

@@ -15,6 +15,10 @@ For running this game yourself and want to use port 22 make sure you remap your 
 Deploy:
 ```./deploy.sh```
 
+Turn off deployed service:
+```sudo systemctl stop terminaltype.service```
+
+
 Ensure local ~/.ssh/config file contains an entry for "deploy.target"
 
 See logs:

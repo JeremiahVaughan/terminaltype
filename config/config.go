@@ -8,10 +8,11 @@ import (
 )
 
 type Config struct {                                           
-    TestMode bool `json:"testMode"`
+    LocalMode bool `json:"localMode"`
     OpenAIAPIKey string `json:"openaiApiKey"`
     SSHPort int `json:"sshPort"`
     HTTPPort int `json:"httpPort"`
+    UiPath string `json:"uiPath"`
     NumberOfSentencesPerTypingTest int `json:"numberOfSentencesPerTypingTest"`                        
     TypingTestDesiredWidth int `json:"typingTestDesiredWidth"`
     RaceStartTimeoutInSeconds int `json:"raceStartTimeoutInSeconds"`

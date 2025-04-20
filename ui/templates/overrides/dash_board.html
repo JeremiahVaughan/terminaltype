@@ -1,0 +1,35 @@
+{{ define "head" }}
+    <style>
+        body {
+            margin: 0;
+            background-color: #000000;
+        }
+        .container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            color: white;
+        }
+        .text {
+            font-size: 2rem;
+        }
+        .important-text {
+            font-size: 4rem;
+        }
+    </style>
+{{ end }}
+
+{{ define "content" }}
+<div class="container">
+    <div class="text">
+        <div>
+            TerminalType is meant to be played in the terminal via ssh:
+        </div>
+        <br>
+        <div class="important-text"> 
+            ssh terminaltype.com
+        </div>
+    <div>
+</div>
+{{ end }}

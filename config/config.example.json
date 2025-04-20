@@ -1,7 +1,8 @@
 {
-  "testMode": false,
+  "localMode": true,
   "openaiApiKey": "something",
   "sshPort": 22,
+  "uiPath": "ui",
   "httpPort": 9001,
   "numberOfSentencesPerTypingTest": 4,
   "typingTestDesiredWidth": 65,

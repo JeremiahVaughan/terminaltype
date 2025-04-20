@@ -1,0 +1,31 @@
+{{ define "base" }}
+<!DOCTYPE html>                                                   
+<html>                                                            
+<head>                                                            
+   <meta charset="utf-8">                                        
+   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg"> 
+   {{ template "head" . }}
+   {{ if .LocalMode }}
+   <script defer>
+       const hotReloadPath = `/hotreload`
+       console.log(`Hot reload initializing @ ${hotReloadPath}`)
+       if (typeof(EventSource) !== "undefined") {
+         const es = new EventSource(hotReloadPath);
+         es.onmessage = function(event) {
+           console.log("code change detected, reloading. Event:", event);                                              
+           location.reload();
+         }
+         es.onerror = function(err) {
+           console.log("lost connection to server, reloading");
+           setTimeout(() => {
+             location.reload();
+           }, 500);
+         };
+         console.log("Hot reload initialized");                                              
+       }
+   </script>
+   {{ end }}
+</head>                                                           
+{{ template "content" . }}
+</html>                                                           
+{{ end }}
