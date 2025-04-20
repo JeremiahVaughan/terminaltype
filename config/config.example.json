@@ -2,7 +2,7 @@
   "testMode": false,
   "openaiApiKey": "something",
   "sshPort": 22,
-  "httpPort": 8080,
+  "httpPort": 9001,
   "numberOfSentencesPerTypingTest": 4,
   "typingTestDesiredWidth": 65,
   "raceStartTimeoutInSeconds": 10,
