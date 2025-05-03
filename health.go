@@ -23,7 +23,7 @@ func testHealthStatus() {
     newStatus := healthy.HealthStatus{
         Service: serviceName,
         StatusKey: TestKey,
-        Unhealthy: false,
+        Healthy: true,
         UnhealthyDelayInSeconds: 20,
         Message: "its healthy",
     }

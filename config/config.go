@@ -1,9 +1,9 @@
 package config
 
 import (
-    "os"
     "fmt"
     "errors"
+    "context"
     "encoding/json"
 )
 
@@ -35,10 +35,10 @@ type Database struct {
 }
 
 
-func New(configPath string) (Config, error) {
-    bytes, err := os.ReadFile(configPath)
+func New(ctx context.Context) (Config, error) {
+    bytes, err := fetchConfigFromS3(ctx, "terminaltype")
     if err != nil {
-        return Config{}, fmt.Errorf("error, when reading config file. Error: %v", err)
+        return Config{}, fmt.Errorf("error, when fetching config file. Error: %v", err)
     }
     c := Config{}
     err = json.Unmarshal(bytes, &c)

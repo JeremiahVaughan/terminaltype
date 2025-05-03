@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-    "flag"
 	"crypto/md5"
 	"encoding/base64"
 	"encoding/hex"
@@ -75,21 +74,24 @@ var theClients *clients.Clients
 const raceRegistrationRequestQueueId = "req_race_reg"
 
 func main() {
+    ctx, cancel := context.WithCancel(context.Background())
+    signalChan := make(chan os.Signal, 1)
+    signal.Notify(
+        signalChan,
+        os.Interrupt,
+        syscall.SIGINT,
+        syscall.SIGTERM,
+    )
+
+    go func() {
+        <-signalChan
+        cancel()
+    }()
 
 	// forces the color profile since its not getting applied sometimes
 	lipgloss.SetColorProfile(termenv.TrueColor)
 
-    var configPath string
-    flag.StringVar(
-        &configPath,
-        "c",
-        "config/config.json",
-        "location of config file",
-    ) 
-
-    flag.Parse()
-
-    config, err := config.New(configPath)
+    config, err := config.New(ctx)
     if err != nil {
         log.Fatalf("error, when creating new config for main(). Error: %v", err)
     }
@@ -113,19 +115,6 @@ func main() {
     controllers := controllers.New(views, models)
     router := router.New(controllers, config)
 
-    ctx, cancel := context.WithCancel(context.Background())
-    signalChan := make(chan os.Signal, 1)
-    signal.Notify(
-        signalChan,
-        os.Interrupt,
-        syscall.SIGINT,
-        syscall.SIGTERM,
-    )
-
-    go func() {
-        <-signalChan
-        cancel()
-    }()
 
     chatClient = openai.NewClient(config.OpenAIAPIKey)
 

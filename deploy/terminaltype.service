@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/home/piegarden/deploy/terminaltype/app -c /home/piegarden/deploy/terminaltype/config.json 
+ExecStart=/home/piegarden/deploy/terminaltype/terminaltype
 
 Restart=on-failure
 User=root

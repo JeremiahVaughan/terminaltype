@@ -25,3 +25,14 @@ See logs:
 ```journalctl -u terminaltype.service```
 
 
+Config
+    Upload with:
+```aws s3 cp <local_file_path> s3://<bucket_name>/<object_key>```
+    Download with:
+```aws s3 cp s3://<bucket_name>/<object_key> <local_file_path>```
+
+Config locations:
+    Config is grabbed from s3 but make sure you emplace s3 files at:
+```/root/.aws/config```
+```/root/.aws/credentials```
+

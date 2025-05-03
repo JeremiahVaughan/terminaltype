@@ -25,7 +25,7 @@ type HealthStatus struct {
     // StatusKey name of your status, must be unique within the service
     StatusKey string `json:"statusKey"`
     // Unhealthy report true if an undesirable condition has been met for this status
-    Unhealthy bool `json:"unhealthy"`
+    Healthy bool `json:"healthy"`
     // UnhealthyDelayInSeconds this many seconds will pass with an unhealthy status of true before status cake is triggered
     UnhealthyDelayInSeconds int64 `json:"unhealthyDelayInSeconds"` 
     // Message the context of what the issue is

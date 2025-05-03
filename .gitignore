@@ -4,5 +4,6 @@
 debug
 __debug_bin*                                                          
 config.json
-deploy/app
+deploy/terminaltype
+
 
